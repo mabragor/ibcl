@@ -30,13 +30,14 @@ enum Token {
 
 };
 
+
 static std::string IdentifierStr;
 static double NumVal;
 
 static int gettok () {
   static int LastChar = ' ';
 
-  while (isspace(LastChar) || LastChar == '\n')
+  while (isspace(LastChar))
     LastChar = getchar();
 
   if (isalpha(LastChar)) {
@@ -91,10 +92,12 @@ void Symbol::Print() {
 }
 
 void List::Print() {
+  fprintf(stderr, "(");
   for (auto it = Content.begin(); it != Content.end(); ++it) {
     (*it)->Print();
     fprintf(stderr, " ");
   }
+  fprintf(stderr, ")");
   return;
 }
 
@@ -108,6 +111,9 @@ class ExprAST {
 ExprAST *Error(const char *Str) { fprintf(stderr, "Error: %s\n", Str); return 0; }
 Form *ErrorF(const char *Str) { Error(Str); return 0; }
 
+ExprAST *Info(const char *Str) { fprintf(stderr, "Info: %s\n", Str); return 0; }
+Form *InfoF(const char *Str) { Error(Str); return 0; }
+
 static std::unordered_map<std::string, Symbol *> SymbolTable;
 
 static Symbol *Intern(std::string name) {
@@ -116,7 +122,7 @@ static Symbol *Intern(std::string name) {
   if (got == SymbolTable.end()) {
     Symbol *new_sym = new Symbol(name);
     SymbolTable[name] = new_sym;
-    Error("interned new symbol");
+    Info("interned new symbol");
     return new_sym;
   } else {
     return got->second;
@@ -170,6 +176,29 @@ static Symbol *Intern(std::string name) {
 static int CurTok;
 static int getNextToken() {
   return CurTok = gettok();
+}
+
+static void PrintCurTok() {
+  // char buff[100];
+  // sprintf(buff, "%d", CurTok);
+  std::string tok_name = "";
+
+  if (CurTok == tok_eof)
+    tok_name = "TOK_EOF";
+
+  if (CurTok == tok_lb)
+    tok_name = "TOK_LB";
+
+  if (CurTok == tok_rb)
+    tok_name = "TOK_RB";
+
+  if (CurTok == tok_sym)
+    tok_name = "TOK_SYM";
+
+  if (CurTok == tok_inval)
+    tok_name = "TOK_INVAL";
+
+  fprintf(stderr, "Current token is: %d %s\n", CurTok, tok_name.c_str());
 }
 
 // PrototypeAST *ErrorP(const char *Str) { Error(Str); return 0; }
@@ -291,26 +320,48 @@ static bool EvalContext = true;
 //   }
 // }
 
+static Form *ReadSymbol() {
+  Symbol *sym = Intern(IdentifierStr);
+  return sym;
+}
+
 static Form *ReadList() {
   std::forward_list<Form *> res;
 
-  switch (CurTok) {
-  case tok_lb: getNextToken(); res.push_front(ReadList());
-  case tok_rb: getNextToken(); res.reverse(); return new List(res);
-  case tok_sym: res.push_front(Intern(IdentifierStr));
-  case tok_inval: getNextToken(); return ErrorF("got invalid token, skipping.");
-  default: return ErrorF("should not reached this clause while reading a list");
+  while (1) {
+    PrintCurTok();
+    if (CurTok == tok_lb) {
+      getNextToken();
+      res.push_front(ReadList());
+      getNextToken();
+    } else {
+      if (CurTok == tok_rb) {
+        res.reverse();
+        return new List(res);
+      } else {
+        if (CurTok == tok_sym) {
+          res.push_front(ReadSymbol());
+          getNextToken();
+        } else {
+          if (CurTok == tok_inval) {
+            getNextToken();
+            return ErrorF("got invalid token in read-list, skipping.");
+          }
+        }
+      }
+    }
   };
 
   return ErrorF("should not be here!");
 }
 
 static Form *ReadForm() {
+  PrintCurTok();
   switch (CurTok) {
   case tok_lb: getNextToken(); return ReadList();
   case tok_rb: return ErrorF("got closed parenthesis while expecting an atom");
-  case tok_sym: return Intern(IdentifierStr);
-  case tok_inval: getNextToken(); return ErrorF("got invalid token, skipping.");
+  case tok_sym: return ReadSymbol();
+  case tok_inval: return ErrorF("got invalid token in read-form, skipping.");
   default: return ErrorF("should not reached this clause while reading a form");
   };
 }
@@ -319,7 +370,8 @@ static ExprAST *ParseExpression () {
   Form *form = ReadForm();
   if (form) {
     form->Print();
-    return 0;
+    fprintf(stderr, "\n");
+    return (ExprAST *) 1;
     // return ParseForm(form, true);
   } else {
     return Error("unable to read form");
@@ -402,6 +454,7 @@ static std::string Prompt = "wisp> ";
 static void MainLoop() {
   while (1) {
     fprintf(stderr, "%s", Prompt.c_str());
+    getNextToken();
 
     switch (CurTok) {
     case tok_eof: return;
@@ -411,9 +464,6 @@ static void MainLoop() {
 }
 
 int main () {
-  fprintf(stderr, "%s", Prompt.c_str());
-  getNextToken();
-  
   MainLoop();
   
   return 0;
