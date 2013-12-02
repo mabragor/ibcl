@@ -116,12 +116,13 @@ Form *InfoF(const char *Str) { Error(Str); return 0; }
 
 static std::unordered_map<std::string, Symbol *> SymbolTable;
 
-static Symbol *Intern(std::string name) {
+static Symbol *Intern(std::string name, std::forward_list<Symbol *> *new_syms) {
   std::unordered_map<std::string, Symbol *>::const_iterator got = SymbolTable.find(name);
 
   if (got == SymbolTable.end()) {
     Symbol *new_sym = new Symbol(name);
     SymbolTable[name] = new_sym;
+    new_syms->push_front(new_sym);
     Info("interned new symbol");
     return new_sym;
   } else {
@@ -320,19 +321,19 @@ static bool EvalContext = true;
 //   }
 // }
 
-static Form *ReadSymbol() {
-  Symbol *sym = Intern(IdentifierStr);
+static Form *ReadSymbol(std::forward_list<Symbol *> *new_syms) {
+  Symbol *sym = Intern(IdentifierStr, new_syms);
   return sym;
 }
 
-static Form *ReadList() {
+static Form *ReadList(std::forward_list<Symbol *> *new_syms) {
   std::forward_list<Form *> res;
 
   while (1) {
     PrintCurTok();
     if (CurTok == tok_lb) {
       getNextToken();
-      res.push_front(ReadList());
+      res.push_front(ReadList(new_syms));
       getNextToken();
     } else {
       if (CurTok == tok_rb) {
@@ -340,7 +341,7 @@ static Form *ReadList() {
         return new List(res);
       } else {
         if (CurTok == tok_sym) {
-          res.push_front(ReadSymbol());
+          res.push_front(ReadSymbol(new_syms));
           getNextToken();
         } else {
           if (CurTok == tok_inval) {
@@ -355,20 +356,31 @@ static Form *ReadList() {
   return ErrorF("should not be here!");
 }
 
-static Form *ReadForm() {
+static Form *ReadForm(std::forward_list<Symbol *> *new_syms) {
   PrintCurTok();
   switch (CurTok) {
-  case tok_lb: getNextToken(); return ReadList();
+  case tok_lb: getNextToken(); return ReadList(new_syms);
   case tok_rb: return ErrorF("got closed parenthesis while expecting an atom");
-  case tok_sym: return ReadSymbol();
+  case tok_sym: return ReadSymbol(new_syms);
   case tok_inval: return ErrorF("got invalid token in read-form, skipping.");
   default: return ErrorF("should not reached this clause while reading a form");
   };
 }
 
+void PrintNewSyms(std::forward_list<Symbol *> new_syms) {
+  fprintf(stderr, "new symbols: ");
+  for (auto it = new_syms.begin(); it != new_syms.end(); ++it) {
+    (*it)->Print();
+    fprintf(stderr, ", ");
+  }
+  fprintf(stderr, "\n");
+}
+
 static ExprAST *ParseExpression () {
-  Form *form = ReadForm();
+  std::forward_list<Symbol *> new_syms;
+  Form *form = ReadForm(&new_syms);
   if (form) {
+    PrintNewSyms(new_syms);
     form->Print();
     fprintf(stderr, "\n");
     return (ExprAST *) 1;
