@@ -145,7 +145,7 @@ class PrototypeNode(object):
         if not function.is_declaration:
             raise RuntimeError('Redefinition of function.')
 
-        if len(callee.args) != len(self.args):
+        if len(function.args) != len(self.args):
             raise RuntimeError('Redeclaration of a function with different number of args.')
 
         for arg, arg_name in zip(function.args, self.args):
@@ -343,9 +343,7 @@ def main():
         try:
             raw = raw_input()
         except (KeyboardInterrupt, EOFError):
-            print
-            return
-
+            break
 
         parser = Parser(Tokenize(raw), operator_precedence)
         while True:
@@ -357,6 +355,7 @@ def main():
                 parser.HandleExtern()
             else:
                 parser.HandleTopLevelExpression()
+    print '\n', g_llvm_module
 
 if __name__ == '__main__':
     main()
