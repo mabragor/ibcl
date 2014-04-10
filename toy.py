@@ -4,6 +4,8 @@ import re
 from llvm.core import Module, Constant, Type, Function, Builder, FCMP_ULT
 from llvm.ee import ExecutionEngine, TargetData
 from llvm.passes import FunctionPassManager
+
+from llvm.core import FCMP_ULT, FCMP_ONE
 from llvm.passes import (PASS_INSTRUCTION_COMBINING,
                          PASS_REASSOCIATE,
                          PASS_GVN,
