@@ -2,6 +2,12 @@
 
 import re
 from llvm.core import Module, Constant, Type, Function, Builder, FCMP_ULT
+from llvm.ee import ExecutionEngine, TargetData
+from llvm.passes import FunctionPassManager
+from llvm.passes import (PASS_INSTRUCTION_COMBINING,
+                         PASS_REASSOCIATE,
+                         PASS_GVN,
+                         PASS_CFG_SIMPLIFICATION)
 
 g_llvm_module = Module.new('my cool jit')
 g_llvm_builder = None
@@ -310,7 +316,16 @@ class Parser(object):
         self.Handle(self.ParseExtern, 'Parsed an extern.')
 
     def HandleTopLevelExpression(self):
-        self.Handle(self.ParseTopLevelExpr, 'Parsed a top-level expression.')
+        try:
+            function = self.ParseTopLevelExpr().CodeGen()
+            result = g_llvm_executor.run_function(function, [])
+            print 'Evaluated to:', result.as_real(Type.double())
+        except Exception,e:
+            print 'Error:', e
+            try:
+                self.Next()
+            except:
+                pass
 
     def Handle(self, function, message):
         try:
