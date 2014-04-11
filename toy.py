@@ -6,6 +6,8 @@ from llvm.core import Module, Constant, Type, Function, Builder, FCMP_ULT
 g_llvm_module = Module.new('my cool jit')
 g_llvm_builder = None
 g_named_values = {}
+g_llvm_pass_manager = FunctionPassManager.new(g_llvm_module)
+g_llvm_executor = ExecutionEngine.new(g_llvm_module)
 
 class EOFToken(object): pass
 
@@ -171,6 +173,8 @@ class FunctionNode(object):
             g_llvm_builder.ret(return_value)
 
             function.verify()
+
+            g_llvm_pass_manager.run(function)
         except:
             function.delete()
             raise
@@ -310,7 +314,6 @@ class Parser(object):
 
     def Handle(self, function, message):
         try:
-            function()
             print message, function().CodeGen()
         except Exception, e:
             print 'Error:', e
@@ -320,6 +323,14 @@ class Parser(object):
                 pass
 
 def main():
+    g_llvm_pass_manager.add(g_llvm_executor.target_data)
+    g_llvm_pass_manager.add(PASS_INSTRUCTION_COMBINING)
+    g_llvm_pass_manager.add(PASS_REASSOCIATE)
+    g_llvm_pass_manager.add(PASS_GVN)
+    g_llvm_pass_manager.add(PASS_CFG_SIMPLIFICATION)
+
+    g_llvm_pass_manager.initialize()
+
     operator_precedence = {
         '<' : 10,
         '+' : 20,
