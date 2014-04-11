@@ -16,6 +16,7 @@ g_llvm_builder = None
 g_named_values = {}
 g_llvm_pass_manager = FunctionPassManager.new(g_llvm_module)
 g_llvm_executor = ExecutionEngine.new(g_llvm_module)
+g_binop_precedence = {}
 
 class EOFToken(object): pass
 
@@ -49,6 +50,10 @@ class ElseToken(object):
 class ForToken(object):
     pass
 class InToken(object):
+    pass
+class BinaryToken(object):
+    pass
+class UnaryToken(object):
     pass
 
 # Regular expressions that tokens and comments of our language.
@@ -90,6 +95,10 @@ def Tokenize(string):
                 yield ForToken()
             elif identifier == 'in':
                 yield InToken()
+            elif identifier == 'binary':
+                yield BinaryToken()
+            elif identifier == 'unary':
+                yield UnaryToken()
             else:
                 yield IdentifierToken(identifier)
             string = string[len(identifier):]
@@ -139,7 +148,8 @@ class BinaryOperationExpressionNode(ExpressionNode):
             result = g_llvm_builder.fcmp(FCMP_ULT, left, right, 'cmptmp')
             return g_llvm_builder.uitofp(result, Type.double(), 'booltmp')
         else:
-            raise RuntimeError('Unknown binary operator.')
+            function = g_llvm_module.get_function_named('binary' + self.operator)
+            return g_llvm_builder.call(function, [left, right], 'binop')
 
 class CallExpressionNode(ExpressionNode):
     def __init__(self, callee, args):
@@ -249,10 +259,30 @@ class ForExpressionNode(ExpressionNode):
 
         return Constant.real(Type.double(), 0)
 
+class UnaryExpressionNode(ExpressionNode):
+    def __init__(self, operator, operand):
+        self.operator = operator
+        self.operand = operand
+
+    def CodeGen(self):
+        operand = self.operand.CodeGen()
+        function = g_llvm_module.get_function_named('unary' + self.operator)
+        return g_llvm_builder.call(function, [operand], 'unop')
+
+
 class PrototypeNode(object):
-    def __init__(self, name, args):
+    def __init__(self, name, args, is_operator=False, precedence=0):
         self.name = name
         self.args = args
+        self.is_operator = is_operator
+        self.precedence = precedence
+
+    def IsBinaryOp(self):
+        return self.is_operator and len(self.args) == 2
+
+    def GetOperatorName(self):
+        assert self.is_operator
+        return self.name[-1]
 
     def CodeGen(self):
         funct_type = Type.function(
@@ -286,6 +316,10 @@ class FunctionNode(object):
 
         function = self.prototype.CodeGen()
 
+        if self.prototype.IsBinaryOp():
+            operator = self.prototype.GetOperatorName()
+            g_binop_precedence[operator] = self.prototype.precedence
+
         block = function.append_basic_block('entry')
         global g_llvm_builder
         g_llvm_builder = Builder.new(block)
@@ -299,14 +333,15 @@ class FunctionNode(object):
             g_llvm_pass_manager.run(function)
         except:
             function.delete()
+            if self.prototype.IsBinaryOp():
+                del g_binop_precedence[self.prototype.GetOperatorName()]
             raise
 
         return function
 
 class Parser(object):
-    def __init__(self, tokens, binop_precedence):
+    def __init__(self, tokens):
         self.tokens = tokens
-        self.binop_precedence = binop_precedence
         self.Next()
 
     def Next(self):
@@ -363,12 +398,12 @@ class Parser(object):
 
     def GetCurrentTokenPrecedence(self):
         if isinstance(self.current, CharacterToken):
-            return self.binop_precedence.get(self.current.char, -1)
+            return g_binop_precedence.get(self.current.char, -1)
         else:
             return -1
 
     def ParseExpression(self):
-        left = self.ParsePrimary()
+        left = self.ParseUnary()
         return self.ParseBinOpRHS(left, 0)
 
     def ParseBinOpRHS(self, left, left_precedence):
@@ -381,7 +416,7 @@ class Parser(object):
             binary_operator = self.current.char
             self.Next()
 
-            right = self.ParsePrimary()
+            right = self.ParseUnary()
 
             next_precedence = self.GetCurrentTokenPrecedence()
             if precedence < next_precedence:
@@ -389,13 +424,42 @@ class Parser(object):
 
             left = BinaryOperationExpressionNode(binary_operator, left, right)
     
-    def ParsePrototype(self):
-        # print self.current
-        if not isinstance(self.current, IdentifierToken):
-            raise RuntimeError('Expected function name in prototype.')
+    def ParseUnary(self):
+        if (not isinstance(self.current, CharacterToken) or
+            self.current in [CharacterToken('('), CharacterToken(',')]):
+            return self.ParsePrimary()
 
-        function_name = self.current.name
+        operator = self.current.char
         self.Next()
+        return UnaryExpressionNode(operator, self.ParseUnary())
+
+    def ParsePrototype(self):
+        precedence = None
+        if isinstance(self.current, IdentifierToken):
+            kind = 'normal'
+            function_name = self.current.name
+            self.Next()
+        elif isinstance(self.current, UnaryToken):
+            kind = 'unary'
+            self.Next()
+            if not isinstance(self.current, CharacterToken):
+                raise RuntimeError('Expected an operator after "unary".')
+            function_name = 'unary' + self.current.char
+            self.Next()
+        elif isinstance(self.current, BinaryToken):
+            kind = 'binary'
+            self.Next()
+            if not isinstance(self.current, CharacterToken):
+                raise RuntimeError('Expected an operator after "binary".')
+            function_name = 'binary' + self.current.char
+            self.Next()
+            if isinstance(self.current, NumberToken):
+                if not 1 <= self.current.value <= 100:
+                    raise RuntimeError('Invalid precedence: must be in range [1 .. 100].')
+                precedence = self.current.value
+                self.Next()
+        else:
+            raise RuntimeError('Expected function name, "unary" or "binary" in prototype.')
 
         if self.current != CharacterToken('('):
             raise RuntimeError('Expected "(" in prototype.')
@@ -411,7 +475,12 @@ class Parser(object):
 
         self.Next()
 
-        return PrototypeNode(function_name, arg_names)
+        if kind == 'unary' and len(arg_names) != 1:
+            raise RuntimeError('Invalid number of arguments for a unary operator.')
+        elif kind == 'binary' and len(arg_names) != 2:
+            raise RuntimeError('Invalid number of arguments for a binary operator.')
+
+        return PrototypeNode(function_name, arg_names, kind != 'normal', precedence)
 
     def ParseDefinition(self):
         self.Next()
@@ -518,12 +587,10 @@ def main():
 
     g_llvm_pass_manager.initialize()
 
-    operator_precedence = {
-        '<' : 10,
-        '+' : 20,
-        '-' : 20,
-        '*' : 40
-    }
+    g_binop_precedence['<'] = 10
+    g_binop_precedence['+'] = 20
+    g_binop_precedence['-'] = 20
+    g_binop_precedence['*'] = 40
 
     while True:
         print 'ready>',
@@ -532,7 +599,7 @@ def main():
         except (KeyboardInterrupt, EOFError):
             break
 
-        parser = Parser(Tokenize(raw), operator_precedence)
+        parser = Parser(Tokenize(raw))
         while True:
             if isinstance(parser.current, EOFToken):
                 break
