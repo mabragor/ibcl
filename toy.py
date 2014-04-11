@@ -6,7 +6,8 @@ from llvm.ee import ExecutionEngine, TargetData
 from llvm.passes import FunctionPassManager
 
 from llvm.core import FCMP_ULT, FCMP_ONE
-from llvm.passes import (PASS_INSTRUCTION_COMBINING,
+from llvm.passes import (PASS_PROMOTE_MEMORY_TO_REGISTER,
+                         PASS_INSTRUCTION_COMBINING,
                          PASS_REASSOCIATE,
                          PASS_GVN,
                          PASS_CFG_SIMPLIFICATION)
@@ -55,6 +56,8 @@ class BinaryToken(object):
     pass
 class UnaryToken(object):
     pass
+class VarToken(object):
+    pass
 
 # Regular expressions that tokens and comments of our language.
 REGEX_NUMBER = re.compile('[0-9]+(?:.[0-9]+)?')
@@ -99,6 +102,8 @@ def Tokenize(string):
                 yield BinaryToken()
             elif identifier == 'unary':
                 yield UnaryToken()
+            elif identifier == 'var':
+                yield VarToken()
             else:
                 yield IdentifierToken(identifier)
             string = string[len(identifier):]
@@ -124,7 +129,7 @@ class VariableExpressionNode(ExpressionNode):
 
     def CodeGen(self):
         if self.name in g_named_values:
-            return g_named_values[self.name]
+            return g_llvm_builder.load(g_named_values[self.name], self.name)
         else:
             raise RuntimeError('Unknown variable name: ' + self.name)
 
@@ -138,7 +143,14 @@ class BinaryOperationExpressionNode(ExpressionNode):
         left = self.left.CodeGen()
         right = self.right.CodeGen()
 
-        if self.operator == '+':
+        if self.operator == '=':
+            if not isinstance(self.left, VariableExpressionNode):
+                raise RuntimeError('Destination of "=" must be a variable.')
+            value = self.right.CodeGen()
+            variable = g_named_values[self.left.name]
+            g_llvm_builder.store(value, variable)
+            return value
+        elif self.operator == '+':
             return g_llvm_builder.fadd(left, right, 'addtmp')
         elif self.operator == '-':
             return g_llvm_builder.fsub(left, right, 'subtmp')
@@ -214,18 +226,20 @@ class ForExpressionNode(ExpressionNode):
         self.body = body
     
     def CodeGen(self):
+        function = g_llvm_builder.basic_block.function
+
+        alloca = CreateEntryBlockAlloca(function, self.loop_variable)
+
         start_value = self.start.CodeGen()
 
-        function = g_llvm_builder.basic_block.function
+        g_llvm_builder.store(start_value, alloca)
+
         pre_header_block = g_llvm_builder.basic_block
         loop_block = function.append_basic_block('loop')
 
         g_llvm_builder.branch(loop_block)
 
         g_llvm_builder.position_at_end(loop_block)
-
-        variable_phi = g_llvm_builder.phi(Type.double(), self.loop_variable)
-        variable_phi.add_incoming(start_value, pre_header_block)
 
         old_value = g_named_values.get(self.loop_variable, None)
         g_named_values[self.loop_variable] = variable_phi
@@ -237,9 +251,11 @@ class ForExpressionNode(ExpressionNode):
         else:
             step_value = Constant.real(Type.double(), 1)
 
-        next_value = g_llvm_builder.fadd(variable_phi, step_value, 'next')
-
         end_condition = self.end.CodeGen()
+        
+        cur_value = g_llvm_builder.load(alloca, self.loop_variable)
+        next_value = g_llvm_builder.fadd(cur_value, step_value, 'nextvar')
+
         end_condition_bool = g_llvm_builder.fcmp(
             FCMP_ONE, end_condition, Constant.real(Type.double(), 0), 'loopcond')
 
@@ -249,8 +265,6 @@ class ForExpressionNode(ExpressionNode):
         g_llvm_builder.cbranch(end_condition_bool, loop_block, after_block)
 
         g_llvm_builder.position_at_end(after_block)
-
-        variable_phi.add_incoming(next_value, loop_end_block)
 
         if old_value:
             g_named_values[self.loop_variable] = old_value
@@ -269,6 +283,37 @@ class UnaryExpressionNode(ExpressionNode):
         function = g_llvm_module.get_function_named('unary' + self.operator)
         return g_llvm_builder.call(function, [operand], 'unop')
 
+class VarExpressionNode(ExpressionNode):
+    def __init__(self, variables, body):
+        self.variables = variables
+        self.body = body
+
+    def CodeGen(self):
+        old_bindings = {}
+        function = g_llvm_builder.basic_block.function
+
+        for var_name, var_expression in self.variables.iteritems():
+            if var_expression is not None:
+                var_value = var_expression.CodeGen()
+            else:
+                var_value = Constant.real(Type.double(), 0)
+
+            alloca = CreateEntryBlockAlloca(function, var_name)
+            g_llvm_builder.store(var_value, alloca)
+
+            old_bindings[var_name] = g_named_values.get(var_name, None)
+
+            g_named_values[var_name] = alloca
+
+        body = self.body.CodeGen()
+
+        for var_name in self.variables:
+            if old_bindings[var_name] is not None:
+                g_named_values[var_name] = old_bindings[var_name]
+            else:
+                del g_named_values[var_name]
+
+        return body
 
 class PrototypeNode(object):
     def __init__(self, name, args, is_operator=False, precedence=0):
@@ -305,6 +350,12 @@ class PrototypeNode(object):
             g_named_values[arg_name] = arg # TODO ???
 
         return function
+
+    def CreateArgumentAllocas(self, function):
+        for arg_name, arg in zip(self.args, function.args):
+            alloca = CreateEntryBlockAlloca(function, arg_name)
+            g_llvm_builder.store(arg, alloca)
+            g_named_values[arg_name] = alloca
 
 class FunctionNode(object):
     def __init__(self, prototype, body):
@@ -384,6 +435,39 @@ class Parser(object):
         self.Next()
         return CallExpressionNode(identifier_name, args)
 
+    def ParseVarExpr(self):
+        self.Next()
+
+        variables = {}
+
+        if not isinstance(self.current, IdentifierToken):
+            raise RuntimeError('Expected identifier after "var".')
+
+        while True:
+            var_name = self.current.name
+            self.Next()
+
+            if self.current == CharacterToken('='):
+                self.Next()
+                variables[var_name] = self.ParseExpression()
+            else:
+                variables[var_name] = None
+
+            if self.current != CharacterToken(','):
+                break
+            self.Next()
+
+            if not isinstance(self.current, IdentifierToken):
+                raise RuntimeError('Expected identifier after "," in a var expression.')
+
+        if not isinstance(self.current, InToken):
+            raise RuntimeError('Expected "in" keyword after "var".')
+        self.Next()
+
+        body = self.ParseExpression()
+
+        return VarExpressionNode(variables, body)
+
     def ParsePrimary(self):
         if isinstance(self.current, IdentifierToken):
             return self.ParseIdentifierExpr()
@@ -391,6 +475,8 @@ class Parser(object):
             return self.ParseNumberExpr()
         elif isinstance(self.current, IfToken):
             return self.ParseIfExpr()
+        elif isinstance(self.current, VarToken):
+            return self.ParseVarExpr()
         elif self.current == CharacterToken('('):
             return self.ParseParenExpr()
         else:
@@ -580,6 +666,7 @@ class Parser(object):
 
 def main():
     g_llvm_pass_manager.add(g_llvm_executor.target_data)
+    g_llvm_pass_manager.add(PASS_PROMOTE_MEMORY_TO_REGISTER)
     g_llvm_pass_manager.add(PASS_INSTRUCTION_COMBINING)
     g_llvm_pass_manager.add(PASS_REASSOCIATE)
     g_llvm_pass_manager.add(PASS_GVN)
@@ -587,6 +674,7 @@ def main():
 
     g_llvm_pass_manager.initialize()
 
+    b_binop_precedence['='] = 2
     g_binop_precedence['<'] = 10
     g_binop_precedence['+'] = 20
     g_binop_precedence['-'] = 20
