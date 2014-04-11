@@ -1,6 +1,11 @@
 #!/usr/bin/env python2
 
 import re
+from llvm.core import Module, Constant, Type, Function, Builder, FCMP_ULT
+
+g_llvm_module = Module.new('my cool jit')
+g_llvm_builder = None
+g_named_values = {}
 
 class EOFToken(object): pass
 
@@ -15,6 +20,7 @@ class IdentifierToken(object):
 class NumberToken(object):
     def __init__(self, value):
         self.value = value
+
 
 class CharacterToken(object):
     def __init__(self, char):
@@ -69,10 +75,18 @@ class ExpressionNode(object): pass
 class NumberExpressionNode(ExpressionNode):
     def __init__(self, value):
         self.value = value
+    def CodeGen(self):
+        return Constant.real(Type.double(), self.value)
 
 class VariableExpressionNode(ExpressionNode):
     def __init__(self, name):
         self.name = name
+
+    def CodeGen(self):
+        if self.name in g_named_values:
+            return g_named_values[self.name]
+        else:
+            raise RuntimeError('Unknown variable name: ' + self.name)
 
 class BinaryOperationExpressionNode(ExpressionNode):
     def __init__(self, operator, left, right):
@@ -80,20 +94,88 @@ class BinaryOperationExpressionNode(ExpressionNode):
         self.left = left
         self.right = right
 
+    def CodeGen(self):
+        left = self.left.CodeGen()
+        right = self.right.CodeGen()
+
+        if self.operator == '+':
+            return g_llvm_builder.fadd(left, right, 'addtmp')
+        elif self.operator == '-':
+            return g_llvm_builder.fsub(left, right, 'subtmp')
+        elif self.operator == '*':
+            return g_llvm_builder.fmul(left, right, 'multmp')
+        elif self.operator == '<':
+            result = g_llvm_builder.fcmp(FCMP_ULT, left, right, 'cmptmp')
+            return g_llvm_builder.uitofp(result, Type.double(), 'booltmp')
+        else:
+            raise RuntimeError('Unknown binary operator.')
+
 class CallExpressionNode(ExpressionNode):
     def __init__(self, callee, args):
         self.callee = callee
         self.args = args
+
+    def CodeGen(self):
+        callee = g_llvm_module.get_function_named(self.callee)
+
+        if len(callee.args) != len(self.args):
+            raise RuntimeError('Incorrect number of arguments passed.')
+
+        arg_values = [i.CodeGen() for i in self.args]
+
+        return g_llvm_builder.call(callee, arg_values, 'calltmp')
 
 class PrototypeNode(object):
     def __init__(self, name, args):
         self.name = name
         self.args = args
 
+    def CodeGen(self):
+        funct_type = Type.function(
+            Type.double(), [Type.double()] * len(self.args), False)
+
+        function = Function.new(g_llvm_module, funct_type, self.name)
+
+        if function.name != self.name:
+            function.delete()
+            function = g_llvm_module.get_function_named(self.name)
+
+        if not function.is_declaration:
+            raise RuntimeError('Redefinition of function.')
+
+        if len(callee.args) != len(self.args):
+            raise RuntimeError('Redeclaration of a function with different number of args.')
+
+        for arg, arg_name in zip(function.args, self.args):
+            arg.name = arg_name
+            g_named_values[arg_name] = arg # TODO ???
+
+        return function
+
 class FunctionNode(object):
     def __init__(self, prototype, body):
         self.prototype = prototype
         self.body = body
+
+    def CodeGen(self):
+        g_named_values.clear()
+
+        function = self.prototype.CodeGen()
+
+        block = function.append_basic_block('entry')
+        global g_llvm_builder
+        g_llvm_builder = Builder.new(block)
+
+        try:
+            return_value = self.body.CodeGen()
+            g_llvm_builder.ret(return_value)
+
+            function.verify()
+        except:
+            function.delete()
+            raise
+
+        return function
 
 class Parser(object):
     def __init__(self, tokens, binop_precedence):
@@ -229,7 +311,7 @@ class Parser(object):
     def Handle(self, function, message):
         try:
             function()
-            print message
+            print message, function().CodeGen()
         except Exception, e:
             print 'Error:', e
             try:
