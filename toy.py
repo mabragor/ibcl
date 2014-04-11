@@ -38,6 +38,17 @@ class CharacterToken(object):
     def __ne__(self, other):
         return not self == other
 
+class IfToken(object):
+    pass
+class ThenToken(object):
+    pass
+class ElseToken(object):
+    pass
+class ForToken(object):
+    pass
+class InToken(object):
+    pass
+
 # Regular expressions that tokens and comments of our language.
 REGEX_NUMBER = re.compile('[0-9]+(?:.[0-9]+)?')
 REGEX_IDENTIFIER = re.compile('[a-zA-Z][a-zA-Z0-9]*')
@@ -67,6 +78,16 @@ def Tokenize(string):
                 yield DefToken()
             elif identifier == 'extern':
                 yield ExternToken()
+            elif identifier == 'if':
+                yield IfToken()
+            elif identifier == 'then':
+                yield ThenToken()
+            elif identifier == 'else':
+                yield ElseToken()
+            elif identifier == 'for':
+                yield ForToken()
+            elif identifier == 'in':
+                yield InToken()
             else:
                 yield IdentifierToken(identifier)
             string = string[len(identifier):]
@@ -132,6 +153,99 @@ class CallExpressionNode(ExpressionNode):
         arg_values = [i.CodeGen() for i in self.args]
 
         return g_llvm_builder.call(callee, arg_values, 'calltmp')
+
+class IfExpressionNode(ExpressionNode):
+    def __init__(self, condition, then_branch, else_branch):
+        self.condition = condition
+        self.then_branch = then_branch
+        self.else_branch = else_branch
+
+    def CodeGen(self):
+        condition = self.condition.CodeGen()
+
+        condition_bool = g_llvm_builder.fcmp(
+            FCMP_ONE, condition, Constant.real(Type.double(), 0), 'ifcond')
+
+        function = g_llvm_builder.basic_block.function
+
+        then_block = function.append_basic_block('then')
+        else_block = function.append_basic_block('else')
+        merge_block = function.append_basic_block('ifcond')
+
+        g_llvm_builder.cbranch(condition_bool, then_block, else_block)
+
+        g_llvm_builder.position_at_end(then_block)
+        then_value = self.then_branch.CodeGen()
+        g_llvm_builder.branch(merge_block)
+
+        then_block = g_llvm_builder.basic_block
+
+        g_llvm_builder.position_at_end(else_block)
+        else_value = self.else_branch.CodeGen()
+        g_llvm_builder.branch(merge_block)
+
+        else_block = g_llvm_builder.basic_block
+
+        g_llvm_builder.position_at_end(merge_block)
+        phi = g_llvm_builder.phi(Type.double(), 'ifmp')
+        phi.add_incoming(then_value, then_block)
+        phi.add_incoming(else_value, else_block)
+
+        return phi
+
+class ForExpressionNode(ExpressionNode):
+    def __init__(self, loop_variable, start, end, step, body):
+        self.loop_variable = loop_variable
+        self.start = start
+        self.end = end
+        self.step = step
+        self.body = body
+    
+    def CodeGen(self):
+        start_value = self.start.CodeGen()
+
+        function = g_llvm_builder.basic_block.function
+        pre_header_block = g_llvm_builder.basic_block
+        loop_block = function.append_basic_block('loop')
+
+        g_llvm_builder.branch(loop_block)
+
+        g_llvm_builder.position_at_end(loop_block)
+
+        variable_phi = g_llvm_builder.phi(Type.double(), self.loop_variable)
+        variable_phi.add_incoming(start_value, pre_header_block)
+
+        old_value = g_named_values.get(self.loop_variable, None)
+        g_named_values[self.loop_variable] = variable_phi
+
+        self.body.CodeGen()
+
+        if self.step:
+            step_value = self.step.CodeGen()
+        else:
+            step_value = Constant.real(Type.double(), 1)
+
+        next_value = g_llvm_builder.fadd(variable_phi, step_value, 'next')
+
+        end_condition = self.end.CodeGen()
+        end_condition_bool = g_llvm_builder.fcmp(
+            FCMP_ONE, end_condition, Constant.real(Type.double(), 0), 'loopcond')
+
+        loop_end_block = g_llvm_builder.basic_block
+        after_block = function.append_basic_block('afterloop')
+
+        g_llvm_builder.cbranch(end_condition_bool, loop_block, after_block)
+
+        g_llvm_builder.position_at_end(after_block)
+
+        variable_phi.add_incoming(next_value, loop_end_block)
+
+        if old_value:
+            g_named_values[self.loop_variable] = old_value
+        else:
+            del g_named_values[self.loop_variable]
+
+        return Constant.real(Type.double(), 0)
 
 class PrototypeNode(object):
     def __init__(self, name, args):
@@ -238,6 +352,8 @@ class Parser(object):
             return self.ParseIdentifierExpr()
         elif isinstance(self.current, NumberToken):
             return self.ParseNumberExpr()
+        elif isinstance(self.current, IfToken):
+            return self.ParseIfExpr()
         elif self.current == CharacterToken('('):
             return self.ParseParenExpr()
         else:
@@ -304,6 +420,60 @@ class Parser(object):
     def ParseExtern(self):
         self.Next()
         return self.ParsePrototype()
+
+    def ParseIfExpr(self):
+        self.Next()
+
+        condition = self.ParseExpression()
+
+        if not isinstance(self.current, ThenToken):
+            raise RuntimeError('Expected "then".')
+        self.Next()
+
+        then_branch = self.ParseExpression()
+
+        if not isinstance(self.current, ElseToken):
+            raise RuntimeError('Expected "else".')
+        self.Next()
+
+        else_branch = self.ParseExpression()
+
+        return IfExpressionNode(condition, then_branch, else_branch)
+
+    def ParseForExpr(self):
+        self.Next()
+
+        if not isinstance(self.current, IdentifierToken):
+            raise RuntimeError('Expected identifier after for.')
+
+        loop_variable = self.current.name
+        self.Next()
+
+        if self.current != CharacterToken('='):
+            raise RuntimeError('Expected "=" after for variable.')
+        self.Next()
+
+        start = self.ParseExpression()
+
+        if self.current != CharacterToken(','):
+            raise RuntimeError('Expected "," after for start value.')
+        self.Next()
+
+        end = self.ParseExpression()
+
+        if self.current == CharacterToken(','):
+            self.Next()
+            step = self.ParseExpression()
+        else:
+            step = None
+
+        if not isinstance(self.current, InToken):
+            raise RuntimeError('Expected "in" after for variable specification.')
+        self.Next()
+
+        body = self.ParseExpression()
+
+        return ForExpressionNode(loop_variable, start, end, step, body)
 
     def ParseTopLevelExpr(self):
         proto = PrototypeNode('', [])
