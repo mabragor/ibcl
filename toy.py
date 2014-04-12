@@ -1,6 +1,8 @@
 #!/usr/bin/env python2
+'''Basic McCarthy lisp written in LLVMPY. First stage of IBCL.'''
 
 import re
+import string
 from llvm.core import Module, Constant, Type, Function, Builder
 from llvm.ee import ExecutionEngine, TargetData
 from llvm.passes import FunctionPassManager
@@ -12,118 +14,167 @@ from llvm.passes import (PASS_PROMOTE_MEMORY_TO_REGISTER,
                          PASS_GVN,
                          PASS_CFG_SIMPLIFICATION)
 
-g_llvm_module = Module.new('my cool jit')
-g_llvm_builder = None
-g_named_values = {}
-g_llvm_pass_manager = FunctionPassManager.new(g_llvm_module)
-g_llvm_executor = ExecutionEngine.new(g_llvm_module)
-g_binop_precedence = {}
+G_LLVM_MODULE = Module.new('my cool jit')
+G_LLVM_BUILDER = None
+G_NAMED_VALUES = {}
+G_LLVM_PASS_MANAGER = FunctionPassManager.new(G_LLVM_MODULE)
+G_LLVM_EXECUTOR = ExecutionEngine.new(G_LLVM_MODULE)
+G_BINOP_PRECEDENCE = {}
 
-def CreateEntryBlockAlloca(function, var_name):
+def create_entry_block_alloca(function, var_name):
+    '''Create stack allocation instructions for a variable'''
     entry = function.get_entry_basic_block()
     builder = Builder.new(entry)
     builder.position_at_beginning(entry)
     return builder.alloca(Type.double(), var_name)
 
+class ConsIterator(object):
+    '''Class for pythonish iteration over cons-based lists.'''
+    def __init__(self, cons):
+        self.cur_cons = cons
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        if self.cur_cons is None:
+            raise StopIteration
+        else:
+            cur = self.cur_cons.car
+            self.cur_cons = self.cur_cons.cdr
+            return cur
+
+class Cons(object):
+    '''Elementary cons-cell'''
+    def __init__(self, car=None, cdr=None):
+        self.car = car
+        self.cdr = cdr
+
+    def __iter__(self):
+        return ConsIterator(self)
+
+    def __repr__(self):
+        return self.PrintCons(True)
+
+    def PrintCons(self, toplevel=False):
+        if self.cdr is None:
+            tail = ")"
+        else:
+            tail = self.cdr.PrintCons()
+
+        if toplevel:
+            return string.join(["(%s" % self.car, tail],
+                               " ")
+        else:
+            return string.join(["%s" % self.car, tail],
+                               " ")
+
+
+def car(cons):
+    '''Return cargo of a cons-cell'''
+    assert isinstance(cons, Cons)
+    return cons.car
+def cdr(cons):
+    '''Return CDR of a cons-cell'''
+    assert isinstance(cons, Cons)
+    return cons.cdr
+
+def cons_list(*args):
+    if len(args) == 0:
+        None
+    else:
+        return Cons(args[0], cons_list(*(args[1:])))
 
 class EOFToken(object):
     pass
-class DefToken(object):
+class LBrToken(object):
     pass
-class ExternToken(object):
+class RBrToken(object):
     pass
-class IfToken(object):
-    pass
-class ThenToken(object):
-    pass
-class ElseToken(object):
-    pass
-class ForToken(object):
-    pass
-class InToken(object):
-    pass
-class BinaryToken(object):
-    pass
-class UnaryToken(object):
-    pass
-class VarToken(object):
+class QuoteToken(object):
     pass
 
-class IdentifierToken(object):
+class SymbolToken(object):
     def __init__(self, name):
         self.name = name
+
+class Symbol(SymbolToken):
+    def __init__(self, name, number):
+        super().__init__(self, name)
+        self.number = number
+    def __repr__(self):
+        return self.name
 
 class NumberToken(object):
     def __init__(self, value):
         self.value = value
 
-class CharacterToken(object):
-    def __init__(self, char):
-        self.char = char
-    def __eq__(self, other):
-        return isinstance(other, CharacterToken) and self.char == other.char
-    def __ne__(self, other):
-        return not self == other
-
-
 # Regular expressions that tokens and comments of our language.
 REGEX_NUMBER = re.compile('[0-9]+(?:.[0-9]+)?')
-REGEX_IDENTIFIER = re.compile('[a-zA-Z][a-zA-Z0-9]*')
-REGEX_COMMENT = re.compile('#.*')
+REGEX_SYMBOL = re.compile("[^()' ]+")
+REGEX_COMMENT = re.compile(';.*')
 
-def Tokenize(string):
+def tokenize(string):
+    '''Consume string, outputting tokens.'''
     while string: # Skip whitespace
         if string[0].isspace():
             string = string[1:]
             continue
 
-        # Run regexes
-        comment_match = REGEX_COMMENT.match(string)
-        number_match = REGEX_NUMBER.match(string)
-        identifier_match = REGEX_IDENTIFIER.match(string)
-
-        if comment_match:
-            comment = comment_match.group(0)
-            string = string[len(comment):]
-        elif number_match:
-            number = number_match.group(0)
-            yield NumberToken(float(number))
-            string = string[len(number):]
-        elif identifier_match:
-            identifier = identifier_match.group(0)
-            if identifier == 'def':
-                yield DefToken()
-            elif identifier == 'extern':
-                yield ExternToken()
-            elif identifier == 'if':
-                yield IfToken()
-            elif identifier == 'then':
-                yield ThenToken()
-            elif identifier == 'else':
-                yield ElseToken()
-            elif identifier == 'for':
-                yield ForToken()
-            elif identifier == 'in':
-                yield InToken()
-            elif identifier == 'binary':
-                yield BinaryToken()
-            elif identifier == 'unary':
-                yield UnaryToken()
-            elif identifier == 'var':
-                yield VarToken()
-            else:
-                yield IdentifierToken(identifier)
-            string = string[len(identifier):]
-        else:
-            yield CharacterToken(string[0])
+        if string[0] == '(':
+            yield LBrToken()
             string = string[1:]
+        elif string[0] == ')':
+            yield RBrToken()
+            string = string[1:]
+        elif string[0] == "'":
+            yield QuoteToken()
+            string = string[1:]
+        else:
+            comment_match = REGEX_COMMENT.match(string)
+            number_match = REGEX_NUMBER.match(string)
+            symbol_match = REGEX_SYMBOL.match(string)
 
+            if comment_match:
+                comment = comment_match.group(0)
+                string = string[len(comment):]
+            elif number_match:
+                number = number_match.group(0)
+                yield NumberToken(float(number))
+                string = string[len(number):]
+            elif symbol_match:
+                symbol = symbol_match.group(0)
+                yield SymbolToken(symbol)
+                string = string[len(symbol):]
+            else:
+                raise RuntimeError('Something should''ve matched in tokenizer')
+    
     yield EOFToken()
 
 
-# Base class for all expression nodes.
 class ExpressionNode(object):
+    '''Base class for all expression nodes.'''
     pass
+
+def codegen_for_data(expr):
+    if isinstance(expr, int) or isinstance(expr, double):
+        return Constant.real(Type.double(), expr)
+    elif isinstance(expr, Symbol):
+        return Constant.integer(Type.int(), expr.number)
+    elif isinstance(expr, Cons):
+        pass
+    else:
+        raise RuntimeError("Don't know how to codewalk following data type %s"
+                           % type(expr))
+                           
+
+
+class QuoteExpressionNode(object):
+    def __init__(self, expr):
+        self.expr = expr
+    def CodeGen(self):
+        return codegen_for_data(self.expr)
+
 
 class NumberExpressionNode(ExpressionNode):
     def __init__(self, value):
@@ -136,8 +187,8 @@ class VariableExpressionNode(ExpressionNode):
         self.name = name
 
     def CodeGen(self):
-        if self.name in g_named_values:
-            return g_llvm_builder.load(g_named_values[self.name], self.name)
+        if self.name in G_NAMED_VALUES:
+            return G_LLVM_BUILDER.load(G_NAMED_VALUES[self.name], self.name)
         else:
             raise RuntimeError('Unknown variable name: ' + self.name)
 
@@ -155,21 +206,21 @@ class BinaryOperationExpressionNode(ExpressionNode):
             if not isinstance(self.left, VariableExpressionNode):
                 raise RuntimeError('Destination of "=" must be a variable.')
             value = self.right.CodeGen()
-            variable = g_named_values[self.left.name]
-            g_llvm_builder.store(value, variable)
+            variable = G_NAMED_VALUES[self.left.name]
+            G_LLVM_BUILDER.store(value, variable)
             return value
         elif self.operator == '+':
-            return g_llvm_builder.fadd(left, right, 'addtmp')
+            return G_LLVM_BUILDER.fadd(left, right, 'addtmp')
         elif self.operator == '-':
-            return g_llvm_builder.fsub(left, right, 'subtmp')
+            return G_LLVM_BUILDER.fsub(left, right, 'subtmp')
         elif self.operator == '*':
-            return g_llvm_builder.fmul(left, right, 'multmp')
+            return G_LLVM_BUILDER.fmul(left, right, 'multmp')
         elif self.operator == '<':
-            result = g_llvm_builder.fcmp(FCMP_ULT, left, right, 'cmptmp')
-            return g_llvm_builder.uitofp(result, Type.double(), 'booltmp')
+            result = G_LLVM_BUILDER.fcmp(FCMP_ULT, left, right, 'cmptmp')
+            return G_LLVM_BUILDER.uitofp(result, Type.double(), 'booltmp')
         else:
-            function = g_llvm_module.get_function_named('binary' + self.operator)
-            return g_llvm_builder.call(function, [left, right], 'binop')
+            function = G_LLVM_MODULE.get_function_named('binary' + self.operator)
+            return G_LLVM_BUILDER.call(function, [left, right], 'binop')
 
 class CallExpressionNode(ExpressionNode):
     def __init__(self, callee, args):
@@ -177,14 +228,14 @@ class CallExpressionNode(ExpressionNode):
         self.args = args
 
     def CodeGen(self):
-        callee = g_llvm_module.get_function_named(self.callee)
+        callee = G_LLVM_MODULE.get_function_named(self.callee)
 
         if len(callee.args) != len(self.args):
             raise RuntimeError('Incorrect number of arguments passed.')
 
         arg_values = [i.CodeGen() for i in self.args]
 
-        return g_llvm_builder.call(callee, arg_values, 'calltmp')
+        return G_LLVM_BUILDER.call(callee, arg_values, 'calltmp')
 
 class IfExpressionNode(ExpressionNode):
     def __init__(self, condition, then_branch, else_branch):
@@ -195,31 +246,31 @@ class IfExpressionNode(ExpressionNode):
     def CodeGen(self):
         condition = self.condition.CodeGen()
 
-        condition_bool = g_llvm_builder.fcmp(
+        condition_bool = G_LLVM_BUILDER.fcmp(
             FCMP_ONE, condition, Constant.real(Type.double(), 0), 'ifcond')
 
-        function = g_llvm_builder.basic_block.function
+        function = G_LLVM_BUILDER.basic_block.function
 
         then_block = function.append_basic_block('then')
         else_block = function.append_basic_block('else')
         merge_block = function.append_basic_block('ifcond')
 
-        g_llvm_builder.cbranch(condition_bool, then_block, else_block)
+        G_LLVM_BUILDER.cbranch(condition_bool, then_block, else_block)
 
-        g_llvm_builder.position_at_end(then_block)
+        G_LLVM_BUILDER.position_at_end(then_block)
         then_value = self.then_branch.CodeGen()
-        g_llvm_builder.branch(merge_block)
+        G_LLVM_BUILDER.branch(merge_block)
 
-        then_block = g_llvm_builder.basic_block
+        then_block = G_LLVM_BUILDER.basic_block
 
-        g_llvm_builder.position_at_end(else_block)
+        G_LLVM_BUILDER.position_at_end(else_block)
         else_value = self.else_branch.CodeGen()
-        g_llvm_builder.branch(merge_block)
+        G_LLVM_BUILDER.branch(merge_block)
 
-        else_block = g_llvm_builder.basic_block
+        else_block = G_LLVM_BUILDER.basic_block
 
-        g_llvm_builder.position_at_end(merge_block)
-        phi = g_llvm_builder.phi(Type.double(), 'ifmp')
+        G_LLVM_BUILDER.position_at_end(merge_block)
+        phi = G_LLVM_BUILDER.phi(Type.double(), 'ifmp')
         phi.add_incoming(then_value, then_block)
         phi.add_incoming(else_value, else_block)
 
@@ -234,22 +285,22 @@ class ForExpressionNode(ExpressionNode):
         self.body = body
     
     def CodeGen(self):
-        function = g_llvm_builder.basic_block.function
+        function = G_LLVM_BUILDER.basic_block.function
 
-        alloca = CreateEntryBlockAlloca(function, self.loop_variable)
+        alloca = create_entry_block_alloca(function, self.loop_variable)
 
         start_value = self.start.CodeGen()
 
-        g_llvm_builder.store(start_value, alloca)
+        G_LLVM_BUILDER.store(start_value, alloca)
 
         loop_block = function.append_basic_block('loop')
 
-        g_llvm_builder.branch(loop_block)
+        G_LLVM_BUILDER.branch(loop_block)
 
-        g_llvm_builder.position_at_end(loop_block)
+        G_LLVM_BUILDER.position_at_end(loop_block)
 
-        old_value = g_named_values.get(self.loop_variable, None)
-        g_named_values[self.loop_variable] = alloca
+        old_value = G_NAMED_VALUES.get(self.loop_variable, None)
+        G_NAMED_VALUES[self.loop_variable] = alloca
 
         self.body.CodeGen()
 
@@ -260,23 +311,23 @@ class ForExpressionNode(ExpressionNode):
 
         end_condition = self.end.CodeGen()
         
-        cur_value = g_llvm_builder.load(alloca, self.loop_variable)
-        next_value = g_llvm_builder.fadd(cur_value, step_value, 'nextvar')
-        g_llvm_builder.store(next_value, alloca)
+        cur_value = G_LLVM_BUILDER.load(alloca, self.loop_variable)
+        next_value = G_LLVM_BUILDER.fadd(cur_value, step_value, 'nextvar')
+        G_LLVM_BUILDER.store(next_value, alloca)
 
-        end_condition_bool = g_llvm_builder.fcmp(
+        end_condition_bool = G_LLVM_BUILDER.fcmp(
             FCMP_ONE, end_condition, Constant.real(Type.double(), 0), 'loopcond')
 
         after_block = function.append_basic_block('afterloop')
 
-        g_llvm_builder.cbranch(end_condition_bool, loop_block, after_block)
+        G_LLVM_BUILDER.cbranch(end_condition_bool, loop_block, after_block)
 
-        g_llvm_builder.position_at_end(after_block)
+        G_LLVM_BUILDER.position_at_end(after_block)
 
         if old_value:
-            g_named_values[self.loop_variable] = old_value
+            G_NAMED_VALUES[self.loop_variable] = old_value
         else:
-            del g_named_values[self.loop_variable]
+            del G_NAMED_VALUES[self.loop_variable]
 
         return Constant.real(Type.double(), 0)
 
@@ -287,8 +338,8 @@ class UnaryExpressionNode(ExpressionNode):
 
     def CodeGen(self):
         operand = self.operand.CodeGen()
-        function = g_llvm_module.get_function_named('unary' + self.operator)
-        return g_llvm_builder.call(function, [operand], 'unop')
+        function = G_LLVM_MODULE.get_function_named('unary' + self.operator)
+        return G_LLVM_BUILDER.call(function, [operand], 'unop')
 
 class VarExpressionNode(ExpressionNode):
     def __init__(self, variables, body):
@@ -297,7 +348,7 @@ class VarExpressionNode(ExpressionNode):
 
     def CodeGen(self):
         old_bindings = {}
-        function = g_llvm_builder.basic_block.function
+        function = G_LLVM_BUILDER.basic_block.function
 
         for var_name, var_expression in self.variables.iteritems():
             if var_expression is not None:
@@ -305,20 +356,20 @@ class VarExpressionNode(ExpressionNode):
             else:
                 var_value = Constant.real(Type.double(), 0)
 
-            alloca = CreateEntryBlockAlloca(function, var_name)
-            g_llvm_builder.store(var_value, alloca)
+            alloca = create_entry_block_alloca(function, var_name)
+            G_LLVM_BUILDER.store(var_value, alloca)
 
-            old_bindings[var_name] = g_named_values.get(var_name, None)
+            old_bindings[var_name] = G_NAMED_VALUES.get(var_name, None)
 
-            g_named_values[var_name] = alloca
+            G_NAMED_VALUES[var_name] = alloca
 
         body = self.body.CodeGen()
 
         for var_name in self.variables:
             if old_bindings[var_name] is not None:
-                g_named_values[var_name] = old_bindings[var_name]
+                G_NAMED_VALUES[var_name] = old_bindings[var_name]
             else:
-                del g_named_values[var_name]
+                del G_NAMED_VALUES[var_name]
 
         return body
 
@@ -340,11 +391,11 @@ class PrototypeNode(object):
         funct_type = Type.function(
             Type.double(), [Type.double()] * len(self.args), False)
 
-        function = Function.new(g_llvm_module, funct_type, self.name)
+        function = Function.new(G_LLVM_MODULE, funct_type, self.name)
 
         if function.name != self.name:
             function.delete()
-            function = g_llvm_module.get_function_named(self.name)
+            function = G_LLVM_MODULE.get_function_named(self.name)
 
         if not function.is_declaration:
             raise RuntimeError('Redefinition of function.')
@@ -359,9 +410,9 @@ class PrototypeNode(object):
 
     def CreateArgumentAllocas(self, function):
         for arg_name, arg in zip(self.args, function.args):
-            alloca = CreateEntryBlockAlloca(function, arg_name)
-            g_llvm_builder.store(arg, alloca)
-            g_named_values[arg_name] = alloca
+            alloca = create_entry_block_alloca(function, arg_name)
+            G_LLVM_BUILDER.store(arg, alloca)
+            G_NAMED_VALUES[arg_name] = alloca
 
 class FunctionNode(object):
     def __init__(self, prototype, body):
@@ -369,34 +420,91 @@ class FunctionNode(object):
         self.body = body
 
     def CodeGen(self):
-        g_named_values.clear()
+        G_NAMED_VALUES.clear()
 
         function = self.prototype.CodeGen()
 
         if self.prototype.IsBinaryOp():
             operator = self.prototype.GetOperatorName()
-            g_binop_precedence[operator] = self.prototype.precedence
+            G_BINOP_PRECEDENCE[operator] = self.prototype.precedence
 
         block = function.append_basic_block('entry')
-        global g_llvm_builder
-        g_llvm_builder = Builder.new(block)
+        global G_LLVM_BUILDER
+        G_LLVM_BUILDER = Builder.new(block)
 
         self.prototype.CreateArgumentAllocas(function)
         
         try:
             return_value = self.body.CodeGen()
-            g_llvm_builder.ret(return_value)
+            G_LLVM_BUILDER.ret(return_value)
 
             function.verify()
 
-            g_llvm_pass_manager.run(function)
+            G_LLVM_PASS_MANAGER.run(function)
         except:
             function.delete()
             if self.prototype.IsBinaryOp():
-                del g_binop_precedence[self.prototype.GetOperatorName()]
+                del G_BINOP_PRECEDENCE[self.prototype.GetOperatorName()]
             raise
 
         return function
+
+G_SYMBOL_TABLE = {}
+SYMBOL_COUNT = 0
+def intern(string):
+    '''Try to find a new symbol in a symbol-table, if not, create new.'''
+    sym = G_SYMBOL_TABLE.get(string, None)
+    if sym is not None:
+        return sym
+    else:
+        G_SYMBOL_TABLE[string] = Symbol(string, SYMBOL_COUNT)
+        SYMBOL_COUNT += 1
+        return G_SYMBOL_TABLE[string]
+
+class Reader(object):
+    '''On each iteration returns Lisp form'''
+    def __init__(self, tokenizer):
+        self.tokenizer = tokenizer
+        self.NextToken()
+
+    def NextToken(self):
+        self.current = self.tokenizer.next()
+
+    def __iter__(self):
+        return self
+
+    def ReadExpression(self):
+        cur = self.current
+        self.NextToken()
+        if isinstance(cur, LBrToken):
+            return self.ReadList()
+        elif isinstance(cur, QuoteToken):
+            return Cons(intern("quote"),
+                        Cons(self.ReadExpression(),
+                             None))
+        elif isinstance(cur, NumberToken):
+            return cur.value
+        elif isinstance(cur, SymbolToken):
+            return intern(cur.name)
+        elif isinstance(cur, EOFToken):
+            raise StopIteration
+        else:
+            raise RuntimeError('Got unknown type of token: %s'
+                               % type(cur))
+
+    def ReadList(self):
+        if isinstance(self.current, RBrToken):
+            self.NextToken()
+            return None
+        elif isinstance(self.current, EOFToken):
+            raise RuntimeError('Got EOF while reading a list.')
+        else:
+            return Cons(self.ReadExpression(),
+                        self.ReadList())
+
+    def next(self):
+        return self.ReadExpression()
+        
 
 class Parser(object):
     def __init__(self, tokens):
@@ -492,7 +600,7 @@ class Parser(object):
 
     def GetCurrentTokenPrecedence(self):
         if isinstance(self.current, CharacterToken):
-            return g_binop_precedence.get(self.current.char, -1)
+            return G_BINOP_PRECEDENCE.get(self.current.char, -1)
         else:
             return -1
 
@@ -653,7 +761,7 @@ class Parser(object):
     def HandleTopLevelExpression(self):
         try:
             function = self.ParseTopLevelExpr().CodeGen()
-            result = g_llvm_executor.run_function(function, [])
+            result = G_LLVM_EXECUTOR.run_function(function, [])
             print 'Evaluated to:', result.as_real(Type.double())
         except Exception,e:
             print 'Error:', e
@@ -673,20 +781,20 @@ class Parser(object):
                 pass
 
 def main():
-    g_llvm_pass_manager.add(g_llvm_executor.target_data)
-    g_llvm_pass_manager.add(PASS_PROMOTE_MEMORY_TO_REGISTER)
-    g_llvm_pass_manager.add(PASS_INSTRUCTION_COMBINING)
-    g_llvm_pass_manager.add(PASS_REASSOCIATE)
-    g_llvm_pass_manager.add(PASS_GVN)
-    g_llvm_pass_manager.add(PASS_CFG_SIMPLIFICATION)
+    G_LLVM_PASS_MANAGER.add(G_LLVM_EXECUTOR.target_data)
+    G_LLVM_PASS_MANAGER.add(PASS_PROMOTE_MEMORY_TO_REGISTER)
+    G_LLVM_PASS_MANAGER.add(PASS_INSTRUCTION_COMBINING)
+    G_LLVM_PASS_MANAGER.add(PASS_REASSOCIATE)
+    G_LLVM_PASS_MANAGER.add(PASS_GVN)
+    G_LLVM_PASS_MANAGER.add(PASS_CFG_SIMPLIFICATION)
 
-    g_llvm_pass_manager.initialize()
+    G_LLVM_PASS_MANAGER.initialize()
 
-    g_binop_precedence['='] = 2
-    g_binop_precedence['<'] = 10
-    g_binop_precedence['+'] = 20
-    g_binop_precedence['-'] = 20
-    g_binop_precedence['*'] = 40
+    G_BINOP_PRECEDENCE['='] = 2
+    G_BINOP_PRECEDENCE['<'] = 10
+    G_BINOP_PRECEDENCE['+'] = 20
+    G_BINOP_PRECEDENCE['-'] = 20
+    G_BINOP_PRECEDENCE['*'] = 40
 
     while True:
         print 'ready>',
@@ -695,7 +803,7 @@ def main():
         except (KeyboardInterrupt, EOFError):
             break
 
-        parser = Parser(Tokenize(raw))
+        parser = Parser(tokenize(raw))
         while True:
             if isinstance(parser.current, EOFToken):
                 break
@@ -705,7 +813,7 @@ def main():
                 parser.HandleExtern()
             else:
                 parser.HandleTopLevelExpression()
-    print '\n', g_llvm_module
+    print '\n', G_LLVM_MODULE
 
 if __name__ == '__main__':
     main()
