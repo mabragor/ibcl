@@ -1,7 +1,7 @@
 #!/usr/bin/env python2
 
 import re
-from llvm.core import Module, Constant, Type, Function, Builder, FCMP_ULT
+from llvm.core import Module, Constant, Type, Function, Builder
 from llvm.ee import ExecutionEngine, TargetData
 from llvm.passes import FunctionPassManager
 
@@ -19,29 +19,19 @@ g_llvm_pass_manager = FunctionPassManager.new(g_llvm_module)
 g_llvm_executor = ExecutionEngine.new(g_llvm_module)
 g_binop_precedence = {}
 
-class EOFToken(object): pass
-
-class DefToken(object): pass
-
-class ExternToken(object): pass
-
-class IdentifierToken(object):
-    def __init__(self, name):
-        self.name = name
-
-class NumberToken(object):
-    def __init__(self, value):
-        self.value = value
+def CreateEntryBlockAlloca(function, var_name):
+    entry = function.get_entry_basic_block()
+    builder = Builder.new(entry)
+    builder.position_at_beginning(entry)
+    return builder.alloca(Type.double(), var_name)
 
 
-class CharacterToken(object):
-    def __init__(self, char):
-        self.char = char
-    def __eq__(self, other):
-        return isinstance(other, CharacterToken) and self.char == other.char
-    def __ne__(self, other):
-        return not self == other
-
+class EOFToken(object):
+    pass
+class DefToken(object):
+    pass
+class ExternToken(object):
+    pass
 class IfToken(object):
     pass
 class ThenToken(object):
@@ -58,6 +48,23 @@ class UnaryToken(object):
     pass
 class VarToken(object):
     pass
+
+class IdentifierToken(object):
+    def __init__(self, name):
+        self.name = name
+
+class NumberToken(object):
+    def __init__(self, value):
+        self.value = value
+
+class CharacterToken(object):
+    def __init__(self, char):
+        self.char = char
+    def __eq__(self, other):
+        return isinstance(other, CharacterToken) and self.char == other.char
+    def __ne__(self, other):
+        return not self == other
+
 
 # Regular expressions that tokens and comments of our language.
 REGEX_NUMBER = re.compile('[0-9]+(?:.[0-9]+)?')
@@ -115,7 +122,8 @@ def Tokenize(string):
 
 
 # Base class for all expression nodes.
-class ExpressionNode(object): pass
+class ExpressionNode(object):
+    pass
 
 class NumberExpressionNode(ExpressionNode):
     def __init__(self, value):
@@ -234,7 +242,6 @@ class ForExpressionNode(ExpressionNode):
 
         g_llvm_builder.store(start_value, alloca)
 
-        pre_header_block = g_llvm_builder.basic_block
         loop_block = function.append_basic_block('loop')
 
         g_llvm_builder.branch(loop_block)
@@ -242,7 +249,7 @@ class ForExpressionNode(ExpressionNode):
         g_llvm_builder.position_at_end(loop_block)
 
         old_value = g_named_values.get(self.loop_variable, None)
-        g_named_values[self.loop_variable] = variable_phi
+        g_named_values[self.loop_variable] = alloca
 
         self.body.CodeGen()
 
@@ -255,11 +262,11 @@ class ForExpressionNode(ExpressionNode):
         
         cur_value = g_llvm_builder.load(alloca, self.loop_variable)
         next_value = g_llvm_builder.fadd(cur_value, step_value, 'nextvar')
+        g_llvm_builder.store(next_value, alloca)
 
         end_condition_bool = g_llvm_builder.fcmp(
             FCMP_ONE, end_condition, Constant.real(Type.double(), 0), 'loopcond')
 
-        loop_end_block = g_llvm_builder.basic_block
         after_block = function.append_basic_block('afterloop')
 
         g_llvm_builder.cbranch(end_condition_bool, loop_block, after_block)
@@ -347,7 +354,6 @@ class PrototypeNode(object):
 
         for arg, arg_name in zip(function.args, self.args):
             arg.name = arg_name
-            g_named_values[arg_name] = arg # TODO ???
 
         return function
 
@@ -375,6 +381,8 @@ class FunctionNode(object):
         global g_llvm_builder
         g_llvm_builder = Builder.new(block)
 
+        self.prototype.CreateArgumentAllocas(function)
+        
         try:
             return_value = self.body.CodeGen()
             g_llvm_builder.ret(return_value)
@@ -674,7 +682,7 @@ def main():
 
     g_llvm_pass_manager.initialize()
 
-    b_binop_precedence['='] = 2
+    g_binop_precedence['='] = 2
     g_binop_precedence['<'] = 10
     g_binop_precedence['+'] = 20
     g_binop_precedence['-'] = 20
