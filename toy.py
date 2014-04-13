@@ -23,6 +23,8 @@ G_LLVM_EXECUTOR = ExecutionEngine.new(G_LLVM_MODULE)
 G_BINOP_PRECEDENCE = {}
 
 llvm.core.load_library_permanently('/home/popolit/code/ibcl/putchard.so')
+llvm.core.load_library_permanently('/home/popolit/code/ibcl/intern.so')
+llvm.core.load_library_permanently('/home/popolit/code/ibcl/repr.so')
 
 def create_entry_block_alloca(function, var_name):
     '''Create stack allocation instructions for a variable'''
@@ -112,10 +114,31 @@ class NumberToken(object):
     def __init__(self, value):
         self.value = value
 
+class StringToken(object):
+    def __init__(self, value):
+        self.value = value
+
 # Regular expressions that tokens and comments of our language.
 REGEX_NUMBER = re.compile('[0-9]+(?:\.[0-9]+)?')
 REGEX_SYMBOL = re.compile("[^()' ]+")
 REGEX_COMMENT = re.compile(';.*')
+
+def read_literal_string(string):
+    res = ""
+    is_escaped = False
+    for i in range(1, len(string)):
+        if is_escaped:
+            res += string[i]
+            is_escaped = False
+        else:
+            if string[i] == '"':
+                return (res, i + 1)
+            elif string[i] == '\\':
+                is_escaped = True
+            else:
+                res += string[i]
+    else:
+        raise RuntimeError('Input finished while reading literal string.')
 
 def tokenize(string):
     '''Consume string, outputting tokens.'''
@@ -133,6 +156,10 @@ def tokenize(string):
         elif string[0] == "'":
             yield QuoteToken()
             string = string[1:]
+        elif string[0] == '"':
+            (res, pos) = read_literal_string(string)
+            yield StringToken(res)
+            string = string[pos:]
         else:
             comment_match = REGEX_COMMENT.match(string)
             number_match = REGEX_NUMBER.match(string)
@@ -203,6 +230,18 @@ class NumberExpressionNode(ExpressionNode):
     def CodeGen(self):
         print "codegening number node"
         return Constant.real(Type.double(), self.value)
+
+class StringExpressionNode(ExpressionNode):
+    def __init__(self, value):
+        self.value = value
+    def CodeGen(self):
+        print "codegening string node"
+        k = Constant.stringz(self.value)
+        # TODO: memory leak???
+        ptr = G_LLVM_BUILDER.alloca(k.type)
+        G_LLVM_BUILDER.store(k, ptr)
+        return ptr
+
 
 class VariableExpressionNode(ExpressionNode):
     def __init__(self, name):
@@ -377,7 +416,8 @@ class PrototypeNode(object):
     def CodeGen(self):
         print "codegening prototype node"
         funct_type = Type.function(
-            Type.double(), [Type.double()] * len(self.args), False)
+            Type.pointer(Type.int(8)),
+            [Type.pointer(Type.int(8))] * len(self.args), False)
 
         function = Function.new(G_LLVM_MODULE, funct_type, self.name)
 
@@ -451,6 +491,15 @@ def intern(string):
         SYMBOL_COUNT += 1
         return G_SYMBOL_TABLE[string]
 
+def atom(obj):
+    if obj is None:
+        return intern("t")
+    elif isinstance(obj, Symbol):
+        return intern("t")
+    else:
+        return intern("nil")
+
+
 class Reader(object):
     '''On each iteration returns Lisp form'''
     def __init__(self, tokenizer):
@@ -473,6 +522,8 @@ class Reader(object):
                         Cons(self.ReadExpression(),
                              None))
         elif isinstance(cur, NumberToken):
+            return cur
+        elif isinstance(cur, StringToken):
             return cur
         elif isinstance(cur, SymbolToken):
             return intern(cur.name)
@@ -500,6 +551,11 @@ def codewalk_atom(atom):
         return VariableExpressionNode(atom.name)
     elif isinstance(atom, NumberToken):
         return NumberExpressionNode(atom.value)
+    elif isinstance(atom, StringToken):
+        return StringExpressionNode(atom.value)
+    else:
+        raise RuntimeError('Do not know how to codewalk this type of atom: %s'
+                           % type(atom))
 
 def codewalk_functoid(form):
     car_name = form.car.name
@@ -579,7 +635,8 @@ def codewalk_for(form):
 
 def codewalk_top_level_expr(form):
     proto = PrototypeNode('', [])
-    return FunctionNode(proto, codewalk(form))
+    return FunctionNode(proto, codewalk(Cons(intern("repr"),
+                                             Cons(form, None))))
         
 def codewalk(form):
     '''Generate AST from a cons-expression'''
@@ -637,6 +694,8 @@ INIT = '''
 (extern putchard (x))
 (extern sin (x))
 (extern cos (x))
+(extern intern (str))
+(extern repr (str))
 '''
 
 def init_runtime():
