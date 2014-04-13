@@ -58,7 +58,7 @@
   (cdr (cdr (cdr (cdr x)))))
 
 
-(defun null. (x)
+(defun null (x)
   (eq '() x))
 
 (defun and. (x y)
@@ -72,12 +72,12 @@
       t))
 
 (defun append. (x y)
-  (if (not. (null. x))
+  (if (not. (null x))
       (cons (car x) (append. (cdr x) y))
       y))
 
 (defun pair. (x y)
-  (cond ((and. (null. x) (null. y)) nil)
+  (cond ((and. (null x) (null y)) nil)
         ((and. (not. (atom x)) (not. (atom y)))
          (cons (list (car x) (car y))
                (pair. (cdr x) (cdr y))))))
@@ -103,7 +103,7 @@
       (evcon. (cdr c) a)))
 
 (defun evlis. (m a)
-  (if (null. m) nil
+  (if (null m) nil
       (cons (eval. (car m) a)
             (evlis. (cdr m) a))))
 

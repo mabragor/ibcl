@@ -8,7 +8,7 @@ from llvm.ee import ExecutionEngine, TargetData
 from llvm.passes import FunctionPassManager
 
 import llvm.core
-from llvm.core import FCMP_ULT, FCMP_ONE, ICMP_NE
+from llvm.core import FCMP_ULT, FCMP_ONE, ICMP_NE, CC_FASTCALL, CC_C
 from llvm.passes import (PASS_PROMOTE_MEMORY_TO_REGISTER,
                          PASS_INSTRUCTION_COMBINING,
                          PASS_REASSOCIATE,
@@ -137,7 +137,7 @@ class StringToken(object):
 # Regular expressions that tokens and comments of our language.
 REGEX_NUMBER = re.compile('[0-9]+(?:\.[0-9]+)?')
 REGEX_SYMBOL = re.compile("[^()' \\n]+")
-REGEX_COMMENT = re.compile(';.*')
+REGEX_COMMENT = re.compile(';[^\\n]*')
 
 def read_literal_string(string):
     res = ""
@@ -242,8 +242,12 @@ class PrognExpressionNode(object):
         G_LLVM_BUILDER.branch(progn_block)
 
         G_LLVM_BUILDER.position_at_end(progn_block)
-        for form in self.forms:
-            value = form.CodeGen()
+        if self.forms:
+            for form in self.forms:
+                value = form.CodeGen()
+        else:
+            value = CallExpressionNode("intern",
+                                       [StringExpressionNode("nil")]).CodeGen()
 
         return value
 
@@ -293,7 +297,9 @@ class CallExpressionNode(ExpressionNode):
 
         arg_values = [i.CodeGen() for i in self.args]
 
-        return G_LLVM_BUILDER.call(callee, arg_values, 'calltmp')
+        res = G_LLVM_BUILDER.call(callee, arg_values, 'calltmp')
+        res.calling_convention = CC_C
+        return res
 
 class IfExpressionNode(ExpressionNode):
     def __init__(self, condition, then_branch, else_branch):
@@ -451,6 +457,7 @@ class PrototypeNode(object):
             [Type.pointer(Type.int(8))] * len(self.args), False)
 
         function = Function.new(G_LLVM_MODULE, funct_type, self.name)
+        function.calling_convention = CC_C
 
         if function.name != self.name:
             function.delete()
@@ -615,7 +622,10 @@ def codewalk_atom(atom):
 
 def codewalk_functoid(form):
     car_name = form.car.name
-    args = [codewalk(x) for x in form.cdr]
+    if nilp(form.cdr):
+        args = []
+    else:
+        args = [codewalk(x) for x in form.cdr]
 
     return CallExpressionNode(car_name, args)
 
@@ -651,12 +661,25 @@ def codewalk_let(forms):
     return VarExpressionNode(variables, body)
 
 def codewalk_progn(forms):
-    return PrognExpressionNode([codewalk(x) for x in forms])
+    if nilp(forms):
+        forms = []
+    else:
+        forms = [codewalk(x) for x in forms]
+    return PrognExpressionNode(forms)
+
+def nilp(x):
+    return (x is None or x == intern("nil"))
 
 def codewalk_prototype(name, args):
     if not isinstance(name, Symbol):
         raise RuntimeError("Name of a function should be a symbol")
-    return PrototypeNode(name.name, [x.name for x in args])
+    if nilp(args):
+        args = []
+    elif isinstance(args, Cons):
+        args = [x.name for x in args]
+    else:
+        raise RuntimeError("Function arguments supposed to be cons-list")
+    return PrototypeNode(name.name, args)
 
 def codewalk_definition(form):
     proto = codewalk_prototype(form.car, form.cdr.car)
@@ -757,7 +780,7 @@ def handle_expression(form):
 def handle_top_level_expression(form):
     try:
         function = codewalk_top_level_expr(form).CodeGen()
-        print function
+        # print function
         result = G_LLVM_EXECUTOR.run_function(function, [])
         print 'Evaluated to:', result.as_pointer()
     except Exception,e:
@@ -787,15 +810,21 @@ INIT = '''
 (extern cdr (x))
 '''
 
+def lisp_read_string(str):
+    for form in Reader(tokenize(str)):
+        handle_form(form)
+
+def lisp_read_file(file):
+    for form in Reader(tokenize(open(file).read())):
+        handle_form(form)
+
 def init_runtime():
     # G_NAMED_VALUES["nil"] = intern("nil")
     # G_NAMED_VALUES["t"] = intern("t")
 
-    for form in Reader(tokenize(INIT)):
-        handle_form(form)
-
-    for form in Reader(tokenize(open('basics.lisp').read())):
-        handle_form(form)
+    lisp_read_string(INIT)
+    lisp_read_file('basics.lisp')
+    lisp_read_file('lisp1.lisp')
     
 
 def main():
@@ -826,7 +855,7 @@ def main():
         reader = Reader(tokenize(raw))
         for form in reader:
             handle_form(form)
-    print '\n', G_LLVM_MODULE
+    print '\n' # , G_LLVM_MODULE
 
 if __name__ == '__main__':
     main()
