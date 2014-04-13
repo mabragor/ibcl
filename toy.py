@@ -8,7 +8,7 @@ from llvm.ee import ExecutionEngine, TargetData
 from llvm.passes import FunctionPassManager
 
 import llvm.core
-from llvm.core import FCMP_ULT, FCMP_ONE
+from llvm.core import FCMP_ULT, FCMP_ONE, ICMP_NE
 from llvm.passes import (PASS_PROMOTE_MEMORY_TO_REGISTER,
                          PASS_INSTRUCTION_COMBINING,
                          PASS_REASSOCIATE,
@@ -25,6 +25,7 @@ G_BINOP_PRECEDENCE = {}
 llvm.core.load_library_permanently('/home/popolit/code/ibcl/putchard.so')
 llvm.core.load_library_permanently('/home/popolit/code/ibcl/intern.so')
 llvm.core.load_library_permanently('/home/popolit/code/ibcl/repr.so')
+llvm.core.load_library_permanently('/home/popolit/code/ibcl/eq.so')
 
 def create_entry_block_alloca(function, var_name):
     '''Create stack allocation instructions for a variable'''
@@ -187,10 +188,11 @@ class ExpressionNode(object):
     pass
 
 def codegen_for_data(expr):
-    if isinstance(expr, int) or isinstance(expr, double):
+    if isinstance(expr, int) or isinstance(expr, float):
         return Constant.real(Type.double(), expr)
     elif isinstance(expr, Symbol):
-        raise RuntimeError("Symbols are not supported as data for now, sorry.")
+        return CallExpressionNode("intern",
+                                  [StringExpressionNode(expr.name)]).CodeGen()
     elif isinstance(expr, Cons):
         raise RuntimeError("Conses are not supported as data for now, sorry.")
     else:
@@ -280,8 +282,12 @@ class IfExpressionNode(ExpressionNode):
         print "codegening if node"
         condition = self.condition.CodeGen()
 
-        condition_bool = G_LLVM_BUILDER.fcmp(
-            FCMP_ONE, condition, Constant.real(Type.double(), 0), 'ifcond')
+        condition_bool = G_LLVM_BUILDER.icmp(
+            ICMP_NE,
+            condition,
+            CallExpressionNode("intern",
+                               [StringExpressionNode("nil")]).CodeGen(),
+            'ifcond')
 
         function = G_LLVM_BUILDER.basic_block.function
 
@@ -499,6 +505,16 @@ def atom(obj):
     else:
         return intern("nil")
 
+def eq(obj1, obj2):
+    if isinstance(obj1, Symbol) and isinstance(obj2, Symbol):
+        if obj1 == obj2:
+            return intern("t")
+        else:
+            return intern("nil")
+    elif obj1 is None and obj2 is None:
+        return intern("t")
+    else:
+        return intern("nil")
 
 class Reader(object):
     '''On each iteration returns Lisp form'''
@@ -633,6 +649,9 @@ def codewalk_for(form):
 
     return ForExpressionNode(loop_variable, start, end, step, body)
 
+def codewalk_quote(forms):
+    return QuoteExpressionNode(forms.car)
+
 def codewalk_top_level_expr(form):
     proto = PrototypeNode('', [])
     return FunctionNode(proto, codewalk(Cons(intern("repr"),
@@ -655,6 +674,8 @@ def codewalk(form):
                 return codewalk_definition(form.cdr)
             elif form.car == intern("extern"):
                 return codewalk_extern(form.cdr)
+            elif form.car == intern("quote"):
+                return codewalk_quote(form.cdr)
             elif form.car == intern("for"):
                 return codewalk_for(form.cdr)
             else: 
@@ -696,6 +717,7 @@ INIT = '''
 (extern cos (x))
 (extern intern (str))
 (extern repr (str))
+(extern eq (x y))
 '''
 
 def init_runtime():
