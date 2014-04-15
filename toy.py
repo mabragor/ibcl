@@ -622,6 +622,27 @@ def handle_top_level_expression(form):
     except Exception,e:
         print 'Error:', e
 
+def handle_form(form):
+    if isinstance(form, Cons):
+        if form.car == intern("extern"):
+            handle_expression(form)
+        elif form.car == intern("defun"):
+            handle_expression(form)
+        else:
+            handle_top_level_expression(form)
+    else:
+        handle_top_level_expression(form)
+
+INIT = '''
+(extern putchard (x))
+(extern sin (x))
+(extern cos (x))
+'''
+
+def init_runtime():
+    for form in Reader(tokenize(INIT)):
+        handle_form(form)
+
 def main():
     G_LLVM_PASS_MANAGER.add(G_LLVM_EXECUTOR.target_data)
     G_LLVM_PASS_MANAGER.add(PASS_PROMOTE_MEMORY_TO_REGISTER)
@@ -638,6 +659,8 @@ def main():
     G_BINOP_PRECEDENCE['-'] = 20
     G_BINOP_PRECEDENCE['*'] = 40
 
+    init_runtime()
+
     while True:
         print 'ready>',
         try:
@@ -647,15 +670,7 @@ def main():
 
         reader = Reader(tokenize(raw))
         for form in reader:
-            if isinstance(form, Cons):
-                if form.car == intern("extern"):
-                    handle_expression(form)
-                elif form.car == intern("defun"):
-                    handle_expression(form)
-                else:
-                    handle_top_level_expression(form)
-            else:
-                handle_top_level_expression(form)
+            handle_form(form)
     print '\n', G_LLVM_MODULE
 
 if __name__ == '__main__':
