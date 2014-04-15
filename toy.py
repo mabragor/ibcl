@@ -7,6 +7,7 @@ from llvm.core import Module, Constant, Type, Function, Builder
 from llvm.ee import ExecutionEngine, TargetData
 from llvm.passes import FunctionPassManager
 
+import llvm.core
 from llvm.core import FCMP_ULT, FCMP_ONE
 from llvm.passes import (PASS_PROMOTE_MEMORY_TO_REGISTER,
                          PASS_INSTRUCTION_COMBINING,
@@ -20,6 +21,8 @@ G_NAMED_VALUES = {}
 G_LLVM_PASS_MANAGER = FunctionPassManager.new(G_LLVM_MODULE)
 G_LLVM_EXECUTOR = ExecutionEngine.new(G_LLVM_MODULE)
 G_BINOP_PRECEDENCE = {}
+
+llvm.core.load_library_permanently('/home/popolit/code/ibcl/putchard.so')
 
 def create_entry_block_alloca(function, var_name):
     '''Create stack allocation instructions for a variable'''
@@ -181,21 +184,18 @@ class PrognExpressionNode(object):
         self.forms = forms
     def CodeGen(self):
         print "codegening progn node"
+
         function = G_LLVM_BUILDER.basic_block.function
+
         progn_block = function.append_basic_block('progn')
-        aftermath_block = function.append_basic_block('aftermath')
-        for form in self.forms[:-1]:
-            form.CodeGen()
-        value = self.forms[-1].CodeGen()
-        G_LLVM_BUILDER.branch(aftermath_block)
-        block = G_LLVM_BUILDER.basic_block
 
-        G_LLVM_BUILDER.position_at_end(aftermath_block)
-        phi = G_LLVM_BUILDER.phi(Type.double(), 'prognres')
-        phi.add_incoming(value, block)
+        G_LLVM_BUILDER.branch(progn_block)
 
-        return phi
+        G_LLVM_BUILDER.position_at_end(progn_block)
+        for form in self.forms:
+            value = form.CodeGen()
 
+        return value
 
 class NumberExpressionNode(ExpressionNode):
     def __init__(self, value):
@@ -600,14 +600,23 @@ def codewalk(form):
                 return codewalk_extern(form.cdr)
             elif form.car == intern("for"):
                 return codewalk_for(form.cdr)
-            else:
+            else: 
                 return codewalk_functoid(form)
     else:
         return codewalk_atom(form)
 
+def handle_expression(form):
+    try:
+        function = codewalk(form).CodeGen()
+        print function
+    except Exception,e:
+        print 'Error:', e
+    
+
 def handle_top_level_expression(form):
     try:
         function = codewalk_top_level_expr(form).CodeGen()
+        print function
         result = G_LLVM_EXECUTOR.run_function(function, [])
         print 'Evaluated to:', result.as_real(Type.double())
     except Exception,e:
@@ -638,7 +647,15 @@ def main():
 
         reader = Reader(tokenize(raw))
         for form in reader:
-            handle_top_level_expression(form)
+            if isinstance(form, Cons):
+                if form.car == intern("extern"):
+                    handle_expression(form)
+                elif form.car == intern("defun"):
+                    handle_expression(form)
+                else:
+                    handle_top_level_expression(form)
+            else:
+                handle_top_level_expression(form)
     print '\n', G_LLVM_MODULE
 
 if __name__ == '__main__':
