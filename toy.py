@@ -696,7 +696,7 @@ def handle_top_level_expression(form):
         function = codewalk_top_level_expr(form).CodeGen()
         print function
         result = G_LLVM_EXECUTOR.run_function(function, [])
-        print 'Evaluated to:', result.as_real(Type.double())
+        print 'Evaluated to:', result.as_pointer()
     except Exception,e:
         print 'Error:', e
 
