@@ -136,7 +136,7 @@ class StringToken(object):
 
 # Regular expressions that tokens and comments of our language.
 REGEX_NUMBER = re.compile('[0-9]+(?:\.[0-9]+)?')
-REGEX_SYMBOL = re.compile("[^()' ]+")
+REGEX_SYMBOL = re.compile("[^()' \\n]+")
 REGEX_COMMENT = re.compile(';.*')
 
 def read_literal_string(string):
@@ -272,6 +272,8 @@ class VariableExpressionNode(ExpressionNode):
 
     def CodeGen(self):
         print "codegening variable node"
+        # ": G_NAMED_VALUES is %s, self.name is: %s" % (G_NAMED_VALUES, self.name)
+        # print "value is: %s" % G_NAMED_VALUES[self.name]
         if self.name in G_NAMED_VALUES:
             return G_LLVM_BUILDER.load(G_NAMED_VALUES[self.name], self.name)
         else:
@@ -301,7 +303,9 @@ class IfExpressionNode(ExpressionNode):
 
     def CodeGen(self):
         print "codegening if node"
+        # ": G_NAMED_VALUES is %s" % G_NAMED_VALUES
         condition = self.condition.CodeGen()
+        # print "codegening if node2: G_NAMED_VALUES is %s" % G_NAMED_VALUES
 
         condition_bool = G_LLVM_BUILDER.icmp(
             ICMP_NE,
@@ -483,7 +487,7 @@ class FunctionNode(object):
 
     def CodeGen(self):
         print "codegening function node"
-        # G_NAMED_VALUES.clear()
+        G_NAMED_VALUES.clear()
         old_bindings = {}
 
         function = self.prototype.CodeGen()
@@ -511,7 +515,7 @@ class FunctionNode(object):
                 del G_BINOP_PRECEDENCE[self.prototype.GetOperatorName()]
             raise
 
-        self.prototype.RestoreArguments(old_bindings)
+        # self.prototype.RestoreArguments(old_bindings)
 
         return function
 
@@ -692,6 +696,25 @@ def codewalk_top_level_expr(form):
     proto = PrototypeNode('', [])
     return FunctionNode(proto, codewalk(Cons(intern("repr"),
                                              Cons(form, None))))
+
+def codewalk_cond(forms):
+    if forms is None or forms == intern("nil"):
+        return codewalk(intern("nil"))
+    else:
+        return codewalk_if(cons_list(forms.car.car,
+                                     Cons(intern("progn"), forms.car.cdr),
+                                     Cons(intern("cond"), forms.cdr)))
+
+def macroexpand_list(forms):
+    if forms is None or forms == intern("nil"):
+        return intern("nil")
+    else:
+        return cons_list(intern("cons"),
+                         forms.car,
+                         macroexpand_list(forms.cdr))
+
+def codewalk_list(forms):
+    return codewalk(macroexpand_list(forms))
         
 def codewalk(form):
     '''Generate AST from a cons-expression'''
@@ -714,6 +737,10 @@ def codewalk(form):
                 return codewalk_quote(form.cdr)
             elif form.car == intern("for"):
                 return codewalk_for(form.cdr)
+            elif form.car == intern("cond"):
+                return codewalk_cond(form.cdr)
+            elif form.car == intern("list"):
+                return codewalk_list(form.cdr)
             else: 
                 return codewalk_functoid(form)
     else:
@@ -766,6 +793,10 @@ def init_runtime():
 
     for form in Reader(tokenize(INIT)):
         handle_form(form)
+
+    for form in Reader(tokenize(open('basics.lisp').read())):
+        handle_form(form)
+    
 
 def main():
     G_LLVM_PASS_MANAGER.add(G_LLVM_EXECUTOR.target_data)
