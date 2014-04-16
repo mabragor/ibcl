@@ -26,6 +26,8 @@ llvm.core.load_library_permanently('/home/popolit/code/ibcl/putchard.so')
 llvm.core.load_library_permanently('/home/popolit/code/ibcl/intern.so')
 llvm.core.load_library_permanently('/home/popolit/code/ibcl/repr.so')
 llvm.core.load_library_permanently('/home/popolit/code/ibcl/eq.so')
+llvm.core.load_library_permanently('/home/popolit/code/ibcl/cons.so')
+llvm.core.load_library_permanently('/home/popolit/code/ibcl/atom.so')
 
 def create_entry_block_alloca(function, var_name):
     '''Create stack allocation instructions for a variable'''
@@ -90,6 +92,9 @@ def cons_list(*args):
         None
     else:
         return Cons(args[0], cons_list(*(args[1:])))
+
+def cons(obj1, obj2):
+    return Cons(obj1, obj2)
 
 class EOFToken(object):
     pass
@@ -197,7 +202,10 @@ def codegen_for_data(expr):
         return CallExpressionNode("intern",
                                   [StringExpressionNode("nil")]).CodeGen()
     elif isinstance(expr, Cons):
-        raise RuntimeError("Conses are not supported as data for now, sorry.")
+        return CallExpressionNode("cons",
+                                  [QuoteExpressionNode(expr.car),
+                                   QuoteExpressionNode(expr.cdr)]).CodeGen()
+
     else:
         raise RuntimeError("Don't know how to codewalk following data type %s"
                            % type(expr))
@@ -736,6 +744,8 @@ INIT = '''
 (extern intern (str))
 (extern repr (str))
 (extern eq (x y))
+(extern cons (x y))
+(extern atom (x))
 '''
 
 def init_runtime():

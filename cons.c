@@ -1,7 +1,7 @@
 #include "/usr/include/python2.7/Python.h"
 #include <stdio.h>
 
-PyObject * atom(PyObject *obj) {
+PyObject * cons(PyObject *obj1, PyObject *obj2) {
   PyObject *moddict = NULL;
   PyObject *mod = NULL;
   PyObject *fun = NULL;
@@ -16,20 +16,21 @@ PyObject * atom(PyObject *obj) {
   fprintf(stderr, "Found toy module\n");
 
   fun = PyObject_GetAttrString(mod,
-  			       "atom");
+  			       "cons");
   if (!fun) goto error;
-  fprintf(stderr, "Found atom there\n");
+  fprintf(stderr, "Found cons there\n");
 
   res = PyObject_CallFunctionObjArgs(fun,
-				     obj,
+				     obj1,
+				     obj2,
   				     NULL);
   if (!res) goto error;
-  fprintf(stderr, "Called atom\n");
+  fprintf(stderr, "Called cons\n");
 
  success:
   Py_XDECREF(fun);
   Py_XDECREF(mod);
-  fprintf(stderr, "Returning from atom\n");
+  fprintf(stderr, "Returning from cons\n");
   return res;
 
  error:
