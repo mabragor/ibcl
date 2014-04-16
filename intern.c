@@ -29,6 +29,7 @@ PyObject * intern(char *str) {
  success:
   Py_XDECREF(fun);
   Py_XDECREF(mod);
+  fprintf(stderr, "Returning from intern\n");
   return res;
 
  error:

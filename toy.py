@@ -310,7 +310,7 @@ class IfExpressionNode(ExpressionNode):
         else_block = G_LLVM_BUILDER.basic_block
 
         G_LLVM_BUILDER.position_at_end(merge_block)
-        phi = G_LLVM_BUILDER.phi(Type.double(), 'ifmp')
+        phi = G_LLVM_BUILDER.phi(Type.pointer(Type.int(8)), 'ifmp')
         phi.add_incoming(then_value, then_block)
         phi.add_incoming(else_value, else_block)
 
