@@ -43,7 +43,7 @@ class ConsIterator(object):
         return self
 
     def next(self):
-        if self.cur_cons is None:
+        if self.cur_cons is None or self.cur_cons == intern("nil"):
             raise StopIteration
         else:
             cur = self.cur_cons.car
@@ -63,7 +63,7 @@ class Cons(object):
         return self.PrintCons(True)
 
     def PrintCons(self, toplevel=False):
-        if self.cdr is None:
+        if self.cdr is None or self.cdr == intern("nil"):
             tail = ")"
         else:
             tail = self.cdr.PrintCons()
@@ -193,6 +193,9 @@ def codegen_for_data(expr):
     elif isinstance(expr, Symbol):
         return CallExpressionNode("intern",
                                   [StringExpressionNode(expr.name)]).CodeGen()
+    elif expr is None:
+        return CallExpressionNode("intern",
+                                  [StringExpressionNode("nil")]).CodeGen()
     elif isinstance(expr, Cons):
         raise RuntimeError("Conses are not supported as data for now, sorry.")
     else:
@@ -442,11 +445,18 @@ class PrototypeNode(object):
 
         return function
 
-    def CreateArgumentAllocas(self, function):
+    def CreateArgumentAllocas(self, function, old_bindings):
         for arg_name, arg in zip(self.args, function.args):
             alloca = create_entry_block_alloca(function, arg_name)
             G_LLVM_BUILDER.store(arg, alloca)
             G_NAMED_VALUES[arg_name] = alloca
+
+    def RestoreArguments(self, old_bindings):
+        for arg_name in self.args:
+            if old_bindings[arg_name] is not None:
+                G_NAMED_VALUES[var_name] = old_bindings[var_name]
+            else:
+                del G_NAMED_VALUES[var_name]
 
 class FunctionNode(object):
     def __init__(self, prototype, body):
@@ -455,7 +465,8 @@ class FunctionNode(object):
 
     def CodeGen(self):
         print "codegening function node"
-        G_NAMED_VALUES.clear()
+        # G_NAMED_VALUES.clear()
+        old_bindings = {}
 
         function = self.prototype.CodeGen()
 
@@ -467,7 +478,7 @@ class FunctionNode(object):
         global G_LLVM_BUILDER
         G_LLVM_BUILDER = Builder.new(block)
 
-        self.prototype.CreateArgumentAllocas(function)
+        self.prototype.CreateArgumentAllocas(function, old_bindings)
         
         try:
             return_value = self.body.CodeGen()
@@ -481,6 +492,8 @@ class FunctionNode(object):
             if self.prototype.IsBinaryOp():
                 del G_BINOP_PRECEDENCE[self.prototype.GetOperatorName()]
             raise
+
+        self.prototype.RestoreArguments(old_bindings)
 
         return function
 
@@ -564,7 +577,12 @@ class Reader(object):
 
 def codewalk_atom(atom):
     if isinstance(atom, Symbol):
-        return VariableExpressionNode(atom.name)
+        if atom.name == "nil" or atom.name == "t":
+            return codewalk(Cons(intern("intern"),
+                                 Cons(StringToken(atom.name),
+                                      None)))
+        else:
+            return VariableExpressionNode(atom.name)
     elif isinstance(atom, NumberToken):
         return NumberExpressionNode(atom.value)
     elif isinstance(atom, StringToken):
@@ -584,7 +602,7 @@ def codewalk_if(form):
     condition = codewalk(form.car)
     then_branch = codewalk(form.cdr.car)
     if form.cdr.cdr is None:
-        else_branch = codewalk(NumberToken(0.0))
+        else_branch = codewalk(intern("nil"))
     else:
         else_branch = codewalk(form.cdr.cdr.car)
 
@@ -721,6 +739,9 @@ INIT = '''
 '''
 
 def init_runtime():
+    # G_NAMED_VALUES["nil"] = intern("nil")
+    # G_NAMED_VALUES["t"] = intern("t")
+
     for form in Reader(tokenize(INIT)):
         handle_form(form)
 

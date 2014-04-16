@@ -4,9 +4,13 @@
 PyObject * repr(PyObject *obj) {
   fprintf(stderr, "Entering repr\n");
   PyObject *res = NULL;
-  int rv = 0;
+  int rv = -1;
 
-  res = PyObject_Str(obj);
+  if (obj == Py_None) {
+    res = PyString_FromString("'nil'");
+  } else {
+    res = PyObject_Str(obj);
+  }
   if (!res) goto error;
   fprintf(stderr, "Got string representation of object\n");
   fprintf(stdout, "repr says: ");
