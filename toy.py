@@ -28,6 +28,7 @@ llvm.core.load_library_permanently('/home/popolit/code/ibcl/repr.so')
 llvm.core.load_library_permanently('/home/popolit/code/ibcl/eq.so')
 llvm.core.load_library_permanently('/home/popolit/code/ibcl/cons.so')
 llvm.core.load_library_permanently('/home/popolit/code/ibcl/atom.so')
+llvm.core.load_library_permanently('/home/popolit/code/ibcl/carcdr.so')
 
 def create_entry_block_alloca(function, var_name):
     '''Create stack allocation instructions for a variable'''
@@ -80,12 +81,21 @@ class Cons(object):
 
 def car(cons):
     '''Return cargo of a cons-cell'''
-    assert isinstance(cons, Cons)
-    return cons.car
+    if isinstance(cons, Cons):
+        return cons.car
+    elif cons is None or cons == intern("nil"):
+        return intern("nil")
+    else:
+        raise RuntimeError('Attempt to call CAR on non-cons something.')
+
 def cdr(cons):
     '''Return CDR of a cons-cell'''
-    assert isinstance(cons, Cons)
-    return cons.cdr
+    if isinstance(cons, Cons):
+        return cons.cdr
+    elif cons is None or cons == intern("nil"):
+        return intern("nil")
+    else:
+        raise RuntimeError('Attempt to call CDR on non-cons something.')
 
 def cons_list(*args):
     if len(args) == 0:
@@ -746,6 +756,8 @@ INIT = '''
 (extern eq (x y))
 (extern cons (x y))
 (extern atom (x))
+(extern car (x))
+(extern cdr (x))
 '''
 
 def init_runtime():
