@@ -250,6 +250,26 @@ class PrognExpressionNode(object):
                                        [StringExpressionNode("nil")]).CodeGen()
 
         return value
+class ErrorExpressionNode(object):
+    def __init__(self, msg):
+        self.msg = msg
+    def CodeGen(self):
+        print "codegening error node"
+
+        function = G_LLVM_BUILDER.basic_block.function
+
+        error_block = function.append_basic_block('error')
+
+        G_LLVM_BUILDER.branch(error_block)
+
+        G_LLVM_BUILDER.position_at_end(error_block)
+
+        value = CallExpressionNode("reprs",
+                           [StringExpressionNode("error: " + self.msg)]
+                           ).CodeGen()
+        G_LLVM_BUILDER.unreachable()
+
+        return value
 
 class NumberExpressionNode(ExpressionNode):
     def __init__(self, value):
@@ -738,7 +758,17 @@ def macroexpand_list(forms):
 
 def codewalk_list(forms):
     return codewalk(macroexpand_list(forms))
-        
+
+def codewalk_error(forms):
+    if nilp(forms):
+        msg = ''
+    elif isinstance(forms.car, StringToken):
+        msg = forms.car.value
+    else:
+        raise RuntimeError('Error special form is supposed to contain string.')
+
+    return ErrorExpressionNode(msg)
+
 def codewalk(form):
     '''Generate AST from a cons-expression'''
     if isinstance(form, Cons):
@@ -764,6 +794,8 @@ def codewalk(form):
                 return codewalk_cond(form.cdr)
             elif form.car == intern("list"):
                 return codewalk_list(form.cdr)
+            elif form.car == intern("error"):
+                return codewalk_error(form.cdr)
             else: 
                 return codewalk_functoid(form)
     else:
@@ -803,6 +835,7 @@ INIT = '''
 (extern cos (x))
 (extern intern (str))
 (extern repr (str))
+(extern reprs (str))
 (extern eq (x y))
 (extern cons (x y))
 (extern atom (x))

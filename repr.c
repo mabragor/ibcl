@@ -24,3 +24,21 @@ PyObject * repr(PyObject *obj) {
   Py_XDECREF(res);
   return NULL;
 }
+
+PyObject * reprs(char *str) {
+  fprintf(stderr, "Entering reprs\n");
+  PyObject *res = NULL;
+  int rv = -1;
+
+  res = PyString_FromString(str);
+  if (!res) goto error;
+  rv = PyObject_Print(res, stdout, 0);
+  if (rv == -1) goto error;
+
+  fprintf(stdout, "\n");
+  return res;
+
+ error:
+  Py_XDECREF(res);
+  return NULL;
+}

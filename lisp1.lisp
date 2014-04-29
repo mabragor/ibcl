@@ -46,7 +46,7 @@
 ;; 	(t (cons (eval (car arglist) env procedures)
 ;; 		 (evlis (cdr arglist) env procedures)))))
 
-(extern error ())
+;; (extern error ())
 (extern value1 (name slot))
 (extern lookup (name env))
 (extern lookup1 (name vars vals env))
