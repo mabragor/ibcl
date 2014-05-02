@@ -31,6 +31,7 @@ llvm.core.load_library_permanently('/home/popolit/code/ibcl/cons.so')
 llvm.core.load_library_permanently('/home/popolit/code/ibcl/atom.so')
 llvm.core.load_library_permanently('/home/popolit/code/ibcl/carcdr.so')
 llvm.core.load_library_permanently('/home/popolit/code/ibcl/read.so')
+llvm.core.load_library_permanently('/home/popolit/code/ibcl/length.so')
 
 def create_entry_block_alloca(function, var_name):
     '''Create stack allocation instructions for a variable'''
@@ -107,6 +108,23 @@ def cons_list(*args):
 
 def cons(obj1, obj2):
     return Cons(obj1, obj2)
+
+def lisp_length(lst):
+    if nilp(lst):
+        return 0
+    elif isinstance(lst, Cons):
+        return 1 + lisp_length(lst.cdr)
+    else:
+        raise RuntimeError("Only cons-lists have well-defined length, sorry.")
+
+def lisp_equality(num1, num2):
+    if isinstance(num1, int) and isinstance(num2, int):
+        if num1 == num2:
+            return intern("t")
+        else:
+            return intern("nil")
+    else:
+        return intern("nil")
 
 class EOFToken(object):
     pass
@@ -830,6 +848,9 @@ def codewalk(form):
                 return codewalk_cond(form.cdr)
             elif form.car == intern("list"):
                 return codewalk_list(form.cdr)
+            elif form.car == intern("="):
+                return codewalk(Cons(intern("lisp_equality"),
+                                     form.cdr))
             elif form.car == intern("error"):
                 return codewalk_error(form.cdr)
             else: 
@@ -870,7 +891,7 @@ INIT = '''
 (extern sin (x))
 (extern cos (x))
 (extern intern (str))
-(extern repr (str))
+(extern repr (x))
 (extern reprs (str))
 (extern eq (x y))
 (extern cons (x y))
@@ -878,6 +899,8 @@ INIT = '''
 (extern car (x))
 (extern cdr (x))
 (extern prog1_read ())
+(extern length (lst))
+(extern lisp_equality (num1 num2))
 '''
 def string_once(str):
     class a(object):

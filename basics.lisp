@@ -127,5 +127,7 @@
 				      (append. (pair. (cadar e) (evlis. (cdr e) a))
 					       a)))))
 	 
-
-
+;; just a small wrapper around REPR
+(defun print (form)
+  (repr form)
+  nil)

@@ -1,17 +1,45 @@
 ;;;; 1st interpreter from Steele and Sussman "Art of the Interpreter"
 ;;;; Syntax adapted to CL conventions
 
+(extern value1 (name slot))
+(extern lookup (name env))
+(extern lookup1 (name vars vals env))
+(extern value (name env))
+
+(defun bind (vars args env)
+  (cond ((= (length vars) (length args))
+	 (cons (cons vars args) env))
+	(t (error))))
+
+(defun value1 (name slot)
+  (cond ((eq '&unbound slot) (error))
+	(t (car slot))))
+
+(defun value (name env)
+  (value1 name (lookup name env)))
+
+(defun lookup1 (name vars vals env)
+  (cond ((null vars) (lookup name (cdr env)))
+	((eq (car vars) name) vals)
+	(t (lookup1 name (cdr vars) (cdr vals) env))))
+
+(defun lookup (name env)
+  (cond ((null env) '&unbound)
+	(t (lookup1 name (caar env) (cdar env) env))))
+
+;; (externtc driver-loop1 (procedures form))
+;; (externtc driver-loop (procedures hunoz))
+
 ;; (defun driver ()
 ;;   (driver-loop <the-primitive-procedures>
-;; 	       (print '|LITHP ITH LITHTENING|)))
+;; 	       (repr 'lithp-ith-lithtening)))
 
-(externtc driver-loop1 (procedures form))
+;; (defuntc driver-loop (procedures hunoz)
+;;   (driver-loop1 procedures (prog1_read)))
 
-(defuntc driver-loop (procedures hunoz)
-  (driver-loop1 procedures (read)))
-
-;; (defun driver-loop1 (procedures form)
-;;   (cond ((atom form) (driver-loop procedures (print (eval form '() procedures))))
+;; (defuntc driver-loop1 (procedures form)
+;;   (cond ((atom form) (driver-loop procedures
+;; 				  (print (eval form '() procedures))))
 ;; 	((eq 'defun (car form))
 ;; 	 (driver-loop (bind (list (caadr form))
 ;; 			    (list (list (cdadr form) (caddr form)))
@@ -49,33 +77,5 @@
 ;; 		 (evlis (cdr arglist) env procedures)))))
 
 ;; (extern error ())
-;; (extern value1 (name slot))
-;; (extern lookup (name env))
-;; (extern lookup1 (name vars vals env))
-;; (extern value (name env))
-
-;; (defun bind (vars args env)
-;;   (cond ((= (length vars) (length args))
-;; 	 (cons (cons vars args) env))
-;; 	(t (error))))
-
-;; (defun error ()
-;;   ) ; for now do nothing
-
-;; (defun value1 (name slot)
-;;   (cond ((eq '&unbound slot) (error))
-;; 	(t (car slot))))
-
-;; (defun value (name env)
-;;   (value1 name (lookup name env)))
-
-;; (defun lookup1 (name vars vals env)
-;;   (cond ((null vars) (lookup name (cdr env)))
-;; 	((eq (car vars) name) vals)
-;; 	(t (lookup1 name (cdr vars) (cdr vals) env))))
-
-;; (defun lookup (name env)
-;;   (cond ((null env) '&unbound)
-;; 	(t (lookup1 name (caar env) (cdar env) env))))
 
 
