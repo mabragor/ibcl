@@ -1,6 +1,7 @@
 #!/usr/bin/env python2
 '''Basic McCarthy lisp written in LLVMPY. First stage of IBCL.'''
 
+from sys import stderr
 import re
 import string
 from llvm.core import Module, Constant, Type, Function, Builder
@@ -29,6 +30,7 @@ llvm.core.load_library_permanently('/home/popolit/code/ibcl/eq.so')
 llvm.core.load_library_permanently('/home/popolit/code/ibcl/cons.so')
 llvm.core.load_library_permanently('/home/popolit/code/ibcl/atom.so')
 llvm.core.load_library_permanently('/home/popolit/code/ibcl/carcdr.so')
+llvm.core.load_library_permanently('/home/popolit/code/ibcl/read.so')
 
 def create_entry_block_alloca(function, var_name):
     '''Create stack allocation instructions for a variable'''
@@ -156,46 +158,53 @@ def read_literal_string(string):
     else:
         raise RuntimeError('Input finished while reading literal string.')
 
-def tokenize(string):
+THE_STRING = ''
+def tokenize(string_getter):
     '''Consume string, outputting tokens.'''
-    while string: # Skip whitespace
-        if string[0].isspace():
-            string = string[1:]
-            continue
+    global THE_STRING
+    while True:
+        if THE_STRING == '':
+            # print stderr, "Getting new string..."
+            THE_STRING = string_getter()
+            # print stderr, "New string is %s" % THE_STRING
+        while THE_STRING: # Skip whitespace
+            if THE_STRING[0].isspace():
+                THE_STRING = THE_STRING[1:]
+                continue
 
-        if string[0] == '(':
-            yield LBrToken()
-            string = string[1:]
-        elif string[0] == ')':
-            yield RBrToken()
-            string = string[1:]
-        elif string[0] == "'":
-            yield QuoteToken()
-            string = string[1:]
-        elif string[0] == '"':
-            (res, pos) = read_literal_string(string)
-            yield StringToken(res)
-            string = string[pos:]
-        else:
-            comment_match = REGEX_COMMENT.match(string)
-            number_match = REGEX_NUMBER.match(string)
-            symbol_match = REGEX_SYMBOL.match(string)
-
-            if comment_match:
-                comment = comment_match.group(0)
-                string = string[len(comment):]
-            elif number_match:
-                number = number_match.group(0)
-                yield NumberToken(float(number))
-                string = string[len(number):]
-            elif symbol_match:
-                symbol = symbol_match.group(0)
-                yield SymbolToken(symbol)
-                string = string[len(symbol):]
+            if THE_STRING[0] == '(':
+                yield LBrToken()
+                THE_STRING = THE_STRING[1:]
+            elif THE_STRING[0] == ')':
+                yield RBrToken()
+                THE_STRING = THE_STRING[1:]
+            elif THE_STRING[0] == "'":
+                yield QuoteToken()
+                THE_STRING = THE_STRING[1:]
+            elif THE_STRING[0] == '"':
+                (res, pos) = read_literal_string(THE_STRING)
+                yield StringToken(res)
+                THE_STRING = THE_STRING[pos:]
             else:
-                raise RuntimeError('Something should''ve matched in tokenizer')
+                comment_match = REGEX_COMMENT.match(THE_STRING)
+                number_match = REGEX_NUMBER.match(THE_STRING)
+                symbol_match = REGEX_SYMBOL.match(THE_STRING)
+
+                if comment_match:
+                    comment = comment_match.group(0)
+                    THE_STRING = THE_STRING[len(comment):]
+                elif number_match:
+                    number = number_match.group(0)
+                    yield NumberToken(float(number))
+                    THE_STRING = THE_STRING[len(number):]
+                elif symbol_match:
+                    symbol = symbol_match.group(0)
+                    yield SymbolToken(symbol)
+                    THE_STRING = THE_STRING[len(symbol):]
+                else:
+                    raise RuntimeError('Something should''ve matched in tokenizer')
     
-    yield EOFToken()
+        yield EOFToken()
 
 
 class ExpressionNode(object):
@@ -583,8 +592,11 @@ def eq(obj1, obj2):
 
 class Reader(object):
     '''On each iteration returns Lisp form'''
-    def __init__(self, tokenizer):
+    def __init__(self, begin_prompt, continue_prompt, tokenizer):
+        self.begin_prompt = begin_prompt
+        self.continue_prompt = continue_prompt
         self.tokenizer = tokenizer
+        self.begin_prompt()
         self.NextToken()
 
     def NextToken(self):
@@ -593,9 +605,19 @@ class Reader(object):
     def __iter__(self):
         return self
 
-    def ReadExpression(self):
+    def ReadExpression(self, toplevel=False):
         cur = self.current
+
+        if isinstance(cur, EOFToken):
+            if toplevel:
+                self.begin_prompt()
+            else:
+                self.continue_prompt()
+            self.NextToken()
+            return self.ReadExpression(toplevel)
+
         self.NextToken()
+        
         if isinstance(cur, LBrToken):
             return self.ReadList()
         elif isinstance(cur, QuoteToken):
@@ -608,8 +630,6 @@ class Reader(object):
             return cur
         elif isinstance(cur, SymbolToken):
             return intern(cur.name)
-        elif isinstance(cur, EOFToken):
-            raise StopIteration
         else:
             raise RuntimeError('Got unknown type of token: %s'
                                % type(cur))
@@ -619,13 +639,15 @@ class Reader(object):
             self.NextToken()
             return None
         elif isinstance(self.current, EOFToken):
-            raise RuntimeError('Got EOF while reading a list.')
+            self.continue_prompt()
+            self.NextToken()
+            return self.ReadList()
         else:
             return Cons(self.ReadExpression(),
                         self.ReadList())
 
     def next(self):
-        return self.ReadExpression()
+        return self.ReadExpression(toplevel=True)
 
 def codewalk_atom(atom):
     if isinstance(atom, Symbol):
@@ -717,8 +739,8 @@ def codewalk_definition(form, tc=False):
                          form.cdr.cdr))
     return FunctionNode(proto, body)
 
-def codewalk_extern(form):
-    return codewalk_prototype(form.car, form.cdr.car)
+def codewalk_extern(form, tc=False):
+    return codewalk_prototype(form.car, form.cdr.car, tc=tc)
 
 def codewalk_for(form):
     '''(for (var from to [step]) &body body)'''
@@ -798,6 +820,8 @@ def codewalk(form):
                 return codewalk_definition(form.cdr, tc=True)
             elif form.car == intern("extern"):
                 return codewalk_extern(form.cdr)
+            elif form.car == intern("externtc"):
+                return codewalk_extern(form.cdr, tc=True)
             elif form.car == intern("quote"):
                 return codewalk_quote(form.cdr)
             elif form.car == intern("for"):
@@ -832,7 +856,7 @@ def handle_top_level_expression(form):
 
 def handle_form(form):
     if isinstance(form, Cons):
-        if form.car == intern("extern"):
+        if form.car == intern("extern") or form.car == intern("externtc"):
             handle_expression(form)
         elif form.car == intern("defun") or form.car == intern("defuntc"):
             handle_expression(form)
@@ -853,14 +877,30 @@ INIT = '''
 (extern atom (x))
 (extern car (x))
 (extern cdr (x))
+(extern prog1_read ())
 '''
+def string_once(str):
+    class a(object):
+        def __init__(self):
+            self.i = True
+        def __call__(self):
+            if self.i:
+                self.i = False
+                return str
+            else:
+                raise StopIteration
+    return a()
 
 def lisp_read_string(str):
-    for form in Reader(tokenize(str)):
+    for form in Reader(lambda : None,
+                       lambda : None,
+                       tokenize(string_once(str))):
         handle_form(form)
 
 def lisp_read_file(file):
-    for form in Reader(tokenize(open(file).read())):
+    for form in Reader(lambda : None,
+                       lambda : None,
+                       tokenize(string_once(open(file).read()))):
         handle_form(form)
 
 def init_runtime():
@@ -870,7 +910,32 @@ def init_runtime():
     lisp_read_string(INIT)
     lisp_read_file('basics.lisp')
     lisp_read_file('lisp1.lisp')
+
+def prompt_print(prompt):
+    class frob (object):
+        def __init__(self, prompt):
+            self.prompt = prompt
+        def __call__(self):
+            if isinstance(self.prompt, str):
+                print self.prompt,
+            else:
+                print self.prompt(),
+    return frob(prompt)
+
+def prog1_read():
+    # res = None
+    for form in Reader(prompt_print(string_once('')),
+                       prompt_print('>>>'),
+                       tokenize(more_raw_input)):
+        return form
     
+def more_raw_input():
+    try:
+        raw = raw_input()
+    except (KeyboardInterrupt, EOFError):
+        raise StopIteration
+    return raw
+
 
 def main():
     G_LLVM_PASS_MANAGER.add(G_LLVM_EXECUTOR.target_data)
@@ -890,17 +955,12 @@ def main():
 
     init_runtime()
 
-    while True:
-        print 'ready>',
-        try:
-            raw = raw_input()
-        except (KeyboardInterrupt, EOFError):
-            break
+    for form in Reader(prompt_print('ready>'),
+                       prompt_print('>>>'),
+                       tokenize(more_raw_input)):
+        handle_form(form)
 
-        reader = Reader(tokenize(raw))
-        for form in reader:
-            handle_form(form)
-    print '\n' # , G_LLVM_MODULE
+    print '\n'
 
 if __name__ == '__main__':
     main()

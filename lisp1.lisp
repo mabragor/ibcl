@@ -5,8 +5,10 @@
 ;;   (driver-loop <the-primitive-procedures>
 ;; 	       (print '|LITHP ITH LITHTENING|)))
 
-;; (defun driver-loop (procedures hunoz)
-;;   (driver-loop1 procedures (read)))
+(externtc driver-loop1 (procedures form))
+
+(defuntc driver-loop (procedures hunoz)
+  (driver-loop1 procedures (read)))
 
 ;; (defun driver-loop1 (procedures form)
 ;;   (cond ((atom form) (driver-loop procedures (print (eval form '() procedures))))
@@ -47,33 +49,33 @@
 ;; 		 (evlis (cdr arglist) env procedures)))))
 
 ;; (extern error ())
-(extern value1 (name slot))
-(extern lookup (name env))
-(extern lookup1 (name vars vals env))
-(extern value (name env))
+;; (extern value1 (name slot))
+;; (extern lookup (name env))
+;; (extern lookup1 (name vars vals env))
+;; (extern value (name env))
 
 ;; (defun bind (vars args env)
 ;;   (cond ((= (length vars) (length args))
 ;; 	 (cons (cons vars args) env))
 ;; 	(t (error))))
 
-(defun error ()
-  ) ; for now do nothing
+;; (defun error ()
+;;   ) ; for now do nothing
 
-(defun value1 (name slot)
-  (cond ((eq '&unbound slot) (error))
-	(t (car slot))))
+;; (defun value1 (name slot)
+;;   (cond ((eq '&unbound slot) (error))
+;; 	(t (car slot))))
 
-(defun value (name env)
-  (value1 name (lookup name env)))
+;; (defun value (name env)
+;;   (value1 name (lookup name env)))
 
-(defun lookup1 (name vars vals env)
-  (cond ((null vars) (lookup name (cdr env)))
-	((eq (car vars) name) vals)
-	(t (lookup1 name (cdr vars) (cdr vals) env))))
+;; (defun lookup1 (name vars vals env)
+;;   (cond ((null vars) (lookup name (cdr env)))
+;; 	((eq (car vars) name) vals)
+;; 	(t (lookup1 name (cdr vars) (cdr vals) env))))
 
-(defun lookup (name env)
-  (cond ((null env) '&unbound)
-	(t (lookup1 name (caar env) (cdar env) env))))
+;; (defun lookup (name env)
+;;   (cond ((null env) '&unbound)
+;; 	(t (lookup1 name (caar env) (cdar env) env))))
 
 
