@@ -318,7 +318,7 @@ class CallExpressionNode(ExpressionNode):
         arg_values = [i.CodeGen() for i in self.args]
 
         res = G_LLVM_BUILDER.call(callee, arg_values, 'calltmp')
-        res.calling_convention = CC_C
+        res.calling_convention = callee.calling_convention
         return res
 
 class IfExpressionNode(ExpressionNode):
@@ -457,11 +457,13 @@ class VarExpressionNode(ExpressionNode):
         return body
 
 class PrototypeNode(object):
-    def __init__(self, name, args, is_operator=False, precedence=0):
+    def __init__(self, name, args, is_operator=False, precedence=0,
+                 calling_convention=CC_C):
         self.name = name
         self.args = args
         self.is_operator = is_operator
         self.precedence = precedence
+        self.calling_convention = calling_convention
 
     def IsBinaryOp(self):
         return self.is_operator and len(self.args) == 2
@@ -477,11 +479,12 @@ class PrototypeNode(object):
             [Type.pointer(Type.int(8))] * len(self.args), False)
 
         function = Function.new(G_LLVM_MODULE, funct_type, self.name)
-        function.calling_convention = CC_C
+        function.calling_convention = self.calling_convention
 
         if function.name != self.name:
             function.delete()
             function = G_LLVM_MODULE.get_function_named(self.name)
+            function.calling_convention = self.calling_convention
 
         if not function.is_declaration:
             raise RuntimeError('Redefinition of function.')
@@ -690,7 +693,7 @@ def codewalk_progn(forms):
 def nilp(x):
     return (x is None or x == intern("nil"))
 
-def codewalk_prototype(name, args):
+def codewalk_prototype(name, args, tc=False):
     if not isinstance(name, Symbol):
         raise RuntimeError("Name of a function should be a symbol")
     if nilp(args):
@@ -699,10 +702,17 @@ def codewalk_prototype(name, args):
         args = [x.name for x in args]
     else:
         raise RuntimeError("Function arguments supposed to be cons-list")
-    return PrototypeNode(name.name, args)
 
-def codewalk_definition(form):
-    proto = codewalk_prototype(form.car, form.cdr.car)
+    if not tc:
+        calling_convention = CC_C
+    else:
+        calling_convention = CC_FASTCALL
+
+    return PrototypeNode(name.name, args,
+                         calling_convention=calling_convention)
+
+def codewalk_definition(form, tc=False):
+    proto = codewalk_prototype(form.car, form.cdr.car, tc=tc)
     body = codewalk(Cons(intern("progn"),
                          form.cdr.cdr))
     return FunctionNode(proto, body)
@@ -784,6 +794,8 @@ def codewalk(form):
                 return codewalk_progn(form.cdr)
             elif form.car == intern("defun"):
                 return codewalk_definition(form.cdr)
+            elif form.car == intern("defuntc"):
+                return codewalk_definition(form.cdr, tc=True)
             elif form.car == intern("extern"):
                 return codewalk_extern(form.cdr)
             elif form.car == intern("quote"):
@@ -822,7 +834,7 @@ def handle_form(form):
     if isinstance(form, Cons):
         if form.car == intern("extern"):
             handle_expression(form)
-        elif form.car == intern("defun"):
+        elif form.car == intern("defun") or form.car == intern("defuntc"):
             handle_expression(form)
         else:
             handle_top_level_expression(form)
