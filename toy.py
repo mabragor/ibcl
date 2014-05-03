@@ -182,9 +182,9 @@ def tokenize(string_getter):
     global THE_STRING
     while True:
         if THE_STRING == '':
-            # print stderr, "Getting new string..."
+            # print >> stderr, "Getting new string..."
             THE_STRING = string_getter()
-            # print stderr, "New string is %s" % THE_STRING
+            # print >> stderr, "New string is %s" % THE_STRING
         while THE_STRING: # Skip whitespace
             if THE_STRING[0].isspace():
                 THE_STRING = THE_STRING[1:]
@@ -253,14 +253,14 @@ class QuoteExpressionNode(object):
     def __init__(self, expr):
         self.expr = expr
     def CodeGen(self):
-        print "codegening quote node"
+        print >> stderr, "codegening quote node"
         return codegen_for_data(self.expr)
 
 class PrognExpressionNode(object):
     def __init__(self, forms):
         self.forms = forms
     def CodeGen(self):
-        print "codegening progn node"
+        print >> stderr, "codegening progn node"
 
         function = G_LLVM_BUILDER.basic_block.function
 
@@ -281,7 +281,7 @@ class ErrorExpressionNode(object):
     def __init__(self, msg):
         self.msg = msg
     def CodeGen(self):
-        print "codegening error node"
+        print >> stderr, "codegening error node"
 
         function = G_LLVM_BUILDER.basic_block.function
 
@@ -302,14 +302,14 @@ class NumberExpressionNode(ExpressionNode):
     def __init__(self, value):
         self.value = value
     def CodeGen(self):
-        print "codegening number node"
+        print >> stderr, "codegening number node"
         return Constant.real(Type.double(), self.value)
 
 class StringExpressionNode(ExpressionNode):
     def __init__(self, value):
         self.value = value
     def CodeGen(self):
-        print "codegening string node"
+        print >> stderr, "codegening string node"
         k = Constant.stringz(self.value)
         # TODO: memory leak???
         ptr = G_LLVM_BUILDER.alloca(k.type)
@@ -322,7 +322,7 @@ class VariableExpressionNode(ExpressionNode):
         self.name = name
 
     def CodeGen(self):
-        print "codegening variable node"
+        print >> stderr, "codegening variable node"
         # ": G_NAMED_VALUES is %s, self.name is: %s" % (G_NAMED_VALUES, self.name)
         # print "value is: %s" % G_NAMED_VALUES[self.name]
         if self.name in G_NAMED_VALUES:
@@ -336,7 +336,7 @@ class CallExpressionNode(ExpressionNode):
         self.args = args
 
     def CodeGen(self):
-        print "codegening call node"
+        print >> stderr, "codegening call node"
         callee = G_LLVM_MODULE.get_function_named(self.callee)
 
         if len(callee.args) != len(self.args):
@@ -355,7 +355,7 @@ class IfExpressionNode(ExpressionNode):
         self.else_branch = else_branch
 
     def CodeGen(self):
-        print "codegening if node"
+        print >> stderr, "codegening if node"
         # ": G_NAMED_VALUES is %s" % G_NAMED_VALUES
         condition = self.condition.CodeGen()
         # print "codegening if node2: G_NAMED_VALUES is %s" % G_NAMED_VALUES
@@ -403,7 +403,7 @@ class ForExpressionNode(ExpressionNode):
         self.body = body
     
     def CodeGen(self):
-        print "codegening for node"
+        print >> stderr, "codegening for node"
         function = G_LLVM_BUILDER.basic_block.function
 
         alloca = create_entry_block_alloca(function, self.loop_variable)
@@ -456,7 +456,7 @@ class VarExpressionNode(ExpressionNode):
         self.body = body
 
     def CodeGen(self):
-        print "codegening let node"
+        print >> stderr, "codegening let node"
         old_bindings = {}
         function = G_LLVM_BUILDER.basic_block.function
 
@@ -500,7 +500,7 @@ class PrototypeNode(object):
         return self.name[-1]
 
     def CodeGen(self):
-        print "codegening prototype node"
+        print >> stderr, "codegening prototype node"
         funct_type = Type.function(
             Type.pointer(Type.int(8)),
             [Type.pointer(Type.int(8))] * len(self.args), False)
@@ -543,7 +543,7 @@ class FunctionNode(object):
         self.body = body
 
     def CodeGen(self):
-        print "codegening function node"
+        print >> stderr, "codegening function node"
         G_NAMED_VALUES.clear()
         old_bindings = {}
 
