@@ -603,7 +603,7 @@ def eq(obj1, obj2):
             return intern("t")
         else:
             return intern("nil")
-    elif obj1 is None and obj2 is None:
+    elif nilp(obj1) and nilp(obj2):
         return intern("t")
     else:
         return intern("nil")
@@ -881,6 +881,8 @@ def handle_form(form):
             handle_expression(form)
         elif form.car == intern("defun") or form.car == intern("defuntc"):
             handle_expression(form)
+        elif form.car == intern("quit"):
+            raise StopIteration
         else:
             handle_top_level_expression(form)
     else:
@@ -948,7 +950,7 @@ def prompt_print(prompt):
 def prog1_read():
     # res = None
     for form in Reader(prompt_print(string_once('')),
-                       prompt_print('>>>'),
+                       prompt_print('... '),
                        tokenize(more_raw_input)):
         return form
     
@@ -959,6 +961,12 @@ def more_raw_input():
         raise StopIteration
     return raw
 
+def repl():
+    for form in Reader(prompt_print('ready>'),
+                       prompt_print('>>>'),
+                       tokenize(more_raw_input)):
+        handle_form(form)
+    print '\n'
 
 def main():
     G_LLVM_PASS_MANAGER.add(G_LLVM_EXECUTOR.target_data)
@@ -978,12 +986,8 @@ def main():
 
     init_runtime()
 
-    for form in Reader(prompt_print('ready>'),
-                       prompt_print('>>>'),
-                       tokenize(more_raw_input)):
-        handle_form(form)
+    repl()
 
-    print '\n'
 
 if __name__ == '__main__':
     main()
