@@ -14,9 +14,18 @@ TODO:
   * (done) Basic McCarthy's lisp, written (almost entirely) in Python
   * (done) Simplest lisp interpreter from Steele & Sussman's
     "Art of the interpreter", written in the lisp from previous step
+    * LOAD-FILE function
+      * (done) at Python level
+      * at McCarthy level
+      * at S&S level
+    * FUNCALL function
+      * at McCarthy level
+      * at S&S level
   * the most sophisticated interpreter from S&S
   * hooks into construction of LLVM IR from lisp code
   * hot-compilation of this IR
+  * ?????
+  * PROFIT!
 
 # License
 

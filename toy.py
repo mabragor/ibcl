@@ -32,6 +32,8 @@ llvm.core.load_library_permanently('/home/popolit/code/ibcl/atom.so')
 llvm.core.load_library_permanently('/home/popolit/code/ibcl/carcdr.so')
 llvm.core.load_library_permanently('/home/popolit/code/ibcl/read.so')
 llvm.core.load_library_permanently('/home/popolit/code/ibcl/length.so')
+llvm.core.load_library_permanently(
+    '/home/popolit/code/ibcl/find_llvm_function.so')
 
 def create_entry_block_alloca(function, var_name):
     '''Create stack allocation instructions for a variable'''
@@ -347,6 +349,39 @@ class CallExpressionNode(ExpressionNode):
         res = G_LLVM_BUILDER.call(callee, arg_values, 'calltmp')
         res.calling_convention = callee.calling_convention
         return res
+
+class FuncallExpressionNode(ExpressionNode):
+    def __init__(self, callee, args):
+        self.callee = callee
+        self.args = args
+
+    def CodeGen(self):
+        print >> stderr, "codegening funcall node"
+        funcallee = self.callee.CodeGen()
+        ptrfinder = G_LLVM_MODULE.get_function_named("find_llvm_function")
+
+        funct_type = Type.pointer(
+            Type.function(
+                Type.pointer(Type.int(8)),
+                [Type.pointer(Type.int(8))] * len(self.args), False))
+
+        # if len(callee.args) != len(self.args):
+        #     raise RuntimeError('Incorrect number of arguments passed.')
+
+        arg_values = [i.CodeGen() for i in self.args]
+
+        ptr = G_LLVM_BUILDER.bitcast(G_LLVM_BUILDER.call(ptrfinder,
+                                                         [funcallee],
+                                                         'ptrfind'),
+                                     funct_type,
+                                     name='cast')
+
+        res = G_LLVM_BUILDER.call(ptr, arg_values, 'funcalltmp')
+        # res.calling_convention = callee.calling_convention
+        return ptr
+
+def find_llvm_function(sym):
+    return G_LLVM_MODULE.get_function_named(sym.name).ptr
 
 class IfExpressionNode(ExpressionNode):
     def __init__(self, condition, then_branch, else_branch):
@@ -692,6 +727,16 @@ def codewalk_functoid(form):
 
     return CallExpressionNode(car_name, args)
 
+def codewalk_funcall(form):
+    car = codewalk(form.car)
+    if nilp(form.cdr):
+        args = []
+    else:
+        args = [codewalk(x) for x in form.cdr]
+
+    return FuncallExpressionNode(car, args)
+    
+
 def codewalk_if(form):
     '''It's really a shame that I need to represent falsity as 0.0'''
     condition = codewalk(form.car)
@@ -853,6 +898,8 @@ def codewalk(form):
                                      form.cdr))
             elif form.car == intern("error"):
                 return codewalk_error(form.cdr)
+            elif form.car == intern("funcall"):
+                return codewalk_funcall(form.cdr)
             else: 
                 return codewalk_functoid(form)
     else:
@@ -903,6 +950,7 @@ INIT = '''
 (extern prog1_read ())
 (extern length (lst))
 (extern lisp_equality (num1 num2))
+(extern find_llvm_function (sym))
 '''
 def string_once(str):
     class a(object):
@@ -960,6 +1008,16 @@ def more_raw_input():
     except (KeyboardInterrupt, EOFError):
         raise StopIteration
     return raw
+
+# class more_raw_input1(object):
+#     def __init__(self):
+#         state = 0
+#     def __call__(self):
+#         if state = 0:
+#             state = 1
+#             return "(driver \"lisp2.lisp\")\n"
+#         elif state = 1:
+#             return more_raw_input()
 
 def repl():
     for form in Reader(prompt_print('ready>'),

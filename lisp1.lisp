@@ -36,7 +36,9 @@
 (extern primop (fun))
 (extern primop-apply (fun args))
 
-(defun driver ()
+ ; (load-file lib-file
+
+(defun driver () ;lib-file)
   (driver-loop '(((car cdr eq atom cons)
 		  &car &cdr &eq &atom &cons))
 	       (repr 'lithp-ith-lithtening)))
